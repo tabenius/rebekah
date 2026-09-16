@@ -16,7 +16,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
         with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          # EPHOR_READ_TOKEN is a PAT (or fine-grained token) with read access
+          # to the private tabenius/BAZ.AI-governance repo, which the default
+          # GITHUB_TOKEN cannot reach. Nix uses it as access-tokens for
+          # github.com, so it also authenticates nixpkgs/WeftMark/Sylvae fetches.
+          # Falls back to GITHUB_TOKEN when the secret is unset (public inputs
+          # only; the ephor-src fetch will then 404).
+          github_access_token: ${{ secrets.EPHOR_READ_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Check flake
         run: nix flake check --print-build-logs
       - name: Test Ephor connector

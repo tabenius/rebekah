@@ -83,8 +83,8 @@ A governed unit of work must remain traceable across participating services:
 | Sylvae | `run_id` |
 | Ephor/KAGP | `entry_id` and `chain_hash` |
 
-Ephor governance decisions enter WeftMark as typed `security:governance`
-evidence (record kind `ephor:governance`). Ephor supplies the policy decision
+Ephor governance decisions enter WeftMark as typed `governance` evidence
+(record kind `ephor:governance`). Ephor supplies the policy decision
 and tamper-evident chain reference; WeftMark remains responsible for deciding
 whether a Change Set is `READY`.
 
@@ -106,6 +106,14 @@ The flake lock pins nixpkgs, WeftMark, Sylvae, and the BAZ.AI-governance
 (Ephor/KAGP) source for reproducible evaluation. If `ephor-src` is not yet in
 your local `flake.lock`, run `nix flake lock` (or `nix flake update ephor-src`)
 once to record the pin.
+
+`tabenius/BAZ.AI-governance` is private, so fetching `ephor-src` requires a
+GitHub token with read access to it. Locally, add it to `~/.config/nix/nix.conf`
+as `access-tokens = github.com=<token>` (or `NIX_CONFIG`). In CI, set the
+`EPHOR_READ_TOKEN` repository secret to a PAT (or fine-grained token) with read
+access to that repo; the workflow passes it to Nix as the github.com access
+token. The default `GITHUB_TOKEN` cannot read another private repository, so
+without this secret `nix flake check` fails with a `404` on `ephor-src`.
 
 ## Run
 
@@ -192,7 +200,7 @@ unavailable-service, and missing-configuration paths.
 
 **Governance attachment complete.** `rebekah-govern` attaches the connector
 output through WeftMark's real evidence interface as dedicated
-`security:governance` evidence, requires it for the review decision, and the
+`governance` evidence, requires it for the review decision, and the
 smoke test proves the readiness effect. See
 [docs/ephor-governance-worker.md](docs/ephor-governance-worker.md) for the
 merged reference implementation the connector calls into.

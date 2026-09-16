@@ -7,8 +7,19 @@ python3Packages.buildPythonApplication {
   inherit src;
 
   build-system = [ python3Packages.setuptools ];
+  dependencies = [ python3Packages.pyyaml ];
   nativeBuildInputs = [ makeWrapper ];
-  nativeCheckInputs = [ git python3Packages.pytestCheckHook ];
+  # textual (>=8,<9) backs WeftMark's optional TUI surface and is available in
+  # nixpkgs, so its tests run. The optional MCP surface needs mcp>=2 (it imports
+  # mcp.Client); nixpkgs only ships mcp 1.29, which lacks that API. Rebekah does
+  # not build or ship the MCP surface (it wraps weftmark-http and the CLI only),
+  # so tests/mcp is scoped out rather than run against an incompatible mcp.
+  nativeCheckInputs = [
+    git
+    python3Packages.pytestCheckHook
+    python3Packages.textual
+  ];
+  disabledTestPaths = [ "tests/mcp" ];
 
   pythonImportsCheck = [ "weftmark" "weftmark.http.server" ];
 
