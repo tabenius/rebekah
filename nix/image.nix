@@ -37,7 +37,8 @@ dockerTools.buildLayeredImage {
 
     chmod 0750 var/lib/rebekah/*
 
-    install -m 0555 ${./entrypoint.sh} usr/local/bin/rebekah-entrypoint\n    install -m 0555 ${./ephor-connector.sh} usr/local/bin/rebekah-ephor
+    install -m 0555 ${./entrypoint.sh} usr/local/bin/rebekah-entrypoint
+    install -m 0555 ${./ephor-connector.sh} usr/local/bin/rebekah-ephor
     ln -s rebekah-entrypoint usr/local/bin/rebekah-doctor
     ln -s rebekah-entrypoint usr/local/bin/rebekah-health
   '';
