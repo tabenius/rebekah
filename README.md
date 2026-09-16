@@ -7,63 +7,81 @@
 <h1 align="center">Rebekah</h1>
 
 <p align="center">
-  A reproducible, self-hosted environment for governed agentic software work.
+  A reproducible, self-hosted runtime for governed agentic software work.
 </p>
 
 > [!IMPORTANT]
-> Rebekah is in its bootstrap phase. The architecture below is an implementation
-> direction, not a production-readiness claim.
+> Rebekah is an executable bootstrap, not yet a production-ready distribution.
+> The core image builds and its four supervised services pass an end-to-end
+> container smoke test.
 
 ## Purpose
 
-Rebekah composes a Docker-compatible container built with **Nix/NixOS tooling**
-that brings together local inference, agent execution, engineering provenance,
-and governance evidence.
+Rebekah builds a Docker-compatible OCI image with **Nix**. It combines local
+inference, agent execution, engineering provenance, and durable review evidence
+without creating another source of truth.
 
-The first integration target is deliberately small:
+The current image contains:
 
 - **OpenCode server** — provider-neutral interactive agent sessions.
 - **Ollama server** — local model inference.
 - **[WeftMark](https://github.com/tabenius/WeftMark)** — Change Sets, semantic
-  scopes, Git lineage, evidence, handoff, review, and merge/release readiness.
+  scopes, Git lineage, evidence, handoff, review, and readiness.
 - **[Sylvae](https://github.com/tabenius/sylvae)** — portable `SKILL.md`
   execution with durable run evidence.
-- **Ephor/KAGP connector** — policy evaluation, risk classification, human
-  oversight, and tamper-evident governance records.
 
-Rebekah owns reproducible composition, isolation, service wiring, lifecycle,
-and end-to-end verification. It does not replace the domains of the components
-it runs or create another source of truth.
+The **Ephor/KAGP connector** is the next integration boundary. Ephor is the
+**Konsonans AI Governance Platform (KAGP)**, maintained in
+[`tabenius/BAZ.AI-governance`](https://github.com/tabenius/BAZ.AI-governance).
 
 ## System boundary
 
-| Component | Authoritative responsibility |
-| --- | --- |
-| OpenCode | Interactive agent sessions and workspace access |
-| Ollama | Local model inference |
-| Sylvae | Skill execution and run evidence |
-| WeftMark | Engineering provenance, review, evidence policy, and readiness |
-| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records |
-| Rebekah | Packaging, isolation, wiring, lifecycle, and integration verification |
+| Component | Authoritative responsibility | Runtime status |
+| --- | --- | --- |
+| OpenCode | Interactive agent sessions and workspace access | Packaged and supervised |
+| Ollama | Local model inference | Packaged and supervised |
+| Sylvae | Skill execution and run evidence | Packaged and supervised |
+| WeftMark | Engineering provenance, review, evidence policy, and readiness | Packaged and supervised |
+| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records | Connector planned |
+| Rebekah | Packaging, isolation, wiring, lifecycle, and integration verification | Implemented bootstrap |
 
-**Ephor** is the **Konsonans AI Governance Platform (KAGP)**. Its repository is
-[`tabenius/BAZ.AI-governance`](https://github.com/tabenius/BAZ.AI-governance).
+Each runtime service has a distinct UID and state directory. The supervisor
+starts services with `no-new-privileges`, binds them to container loopback, checks
+their real health endpoints, forwards termination, and fails when any required
+service exits.
+
+## Runtime topology
+
+```mermaid
+flowchart TB
+    R["Rebekah supervisor"]
+    O["Ollama :11434"]
+    C["OpenCode :4096"]
+    S["Sylvae :8971"]
+    W["WeftMark :8765"]
+    R --> O
+    R --> C
+    R --> S
+    R --> W
+```
+
+All ports are internal and loopback-only. Remote access belongs behind an
+authenticated TLS proxy or secure tunnel. Secrets must be injected at runtime;
+they must not enter the image or Nix store.
+
+WeftMark operates on the Git repository mounted at `/workspace` and requires a
+valid `HEAD`. Persistent service data lives under `/var/lib/rebekah`.
 
 ## Correlation spine
 
-A governed unit of work must remain traceable across all participating services:
+A governed unit of work must remain traceable across participating services:
 
-```text
-WeftMark Change Set ID
-        │
-        ├── OpenCode session ID
-        ├── Sylvae run_id
-        └── Ephor entry_id
-                └── chain_hash
-```
-
-The WeftMark Change Set is the workflow subject. Provider-specific identifiers
-remain correlated attributes rather than competing identities.
+| Authority | Correlated identifier |
+| --- | --- |
+| WeftMark | Change Set ID — the workflow subject |
+| OpenCode | Session ID |
+| Sylvae | `run_id` |
+| Ephor/KAGP | `entry_id` and `chain_hash` |
 
 Ephor governance decisions should enter WeftMark as typed
 `ephor:governance` evidence. Ephor supplies the policy decision and
@@ -71,79 +89,82 @@ tamper-evident chain reference; WeftMark remains responsible for deciding
 whether a Change Set is `READY`.
 
 See the [bootstrap integration contract](docs/bootstrap-contract.md) for the
-initial correlation envelope, deployment boundary, evidence shape, and
-acceptance test.
+correlation envelope, deployment boundary, evidence shape, fail-closed
+semantics, and acceptance test.
 
-## Initial deployment shape
+## Build
 
-```text
-Rebekah · Nix-built container
-├── supervised services
-│   ├── Ollama
-│   ├── OpenCode
-│   ├── Sylvae
-│   └── WeftMark
-├── Ephor/KAGP connector
-├── shared correlation envelope
-├── isolated persistent state
-└── end-to-end smoke test
-```
-
-Internal services should bind only to loopback or a private container network.
-Remote access belongs behind an authenticated TLS proxy or secure tunnel.
-Secrets must be injected at runtime and must not enter the image or Nix store.
-
-## First milestone
-
-The bootstrap milestone is one reproducible test flow:
-
-```text
-Change Set
-  → correlated OpenCode/Sylvae execution
-  → Ephor policy record and chain hash
-  → typed WeftMark evidence
-  → readiness decision
-```
-
-The test must also prove that missing, unavailable, or failed governance cannot
-silently become approved evidence.
-
-## Build the bootstrap image
-
-Nix with flakes enabled is required.
+Nix with flakes enabled and a Docker-compatible runtime are required.
 
 ```bash
 nix flake check
 nix build .#image
 docker load < result
-docker run --rm rebekah:bootstrap doctor
 ```
 
-Run the container smoke test after loading the image:
+The flake lock pins nixpkgs, WeftMark, and Sylvae for reproducible evaluation.
+
+## Run
+
+Create a persistent state volume and mount a real Git repository:
 
 ```bash
-tests/smoke.sh
+docker volume create rebekah-state
+
+docker run --rm \
+  --read-only \
+  --tmpfs /run/rebekah:rw,noexec,nosuid,size=16m \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --mount type=volume,src=rebekah-state,dst=/var/lib/rebekah \
+  --mount type=bind,src="$PWD",dst=/workspace \
+  -e REBEKAH_CHANGE_SET_ID=your-change-set-id \
+  rebekah:latest
 ```
 
-The image currently validates its filesystem, service-state boundaries, and
-Change Set correlation input. It reports a component binary as `pending` when
-that component has not yet been packaged; pending never means healthy or
-approved.
+The entrypoint initializes volume ownership for the four isolated service UIDs.
+The mounted workspace is the only Git safe-directory exception configured by
+the runtime.
+
+Useful diagnostics:
+
+```bash
+docker run --rm --mount type=bind,src="$PWD",dst=/workspace rebekah:latest doctor
+docker exec <container-name> rebekah-health
+```
+
+## Verify
+
+After loading the image, run the same immutable-root integration test used by
+CI:
+
+```bash
+bash tests/smoke.sh
+```
+
+The test creates a disposable Git repository, starts the container with a
+read-only root filesystem, and requires successful health responses from all
+four services.
 
 ## Repository layout
 
-- `flake.nix` defines supported systems, the image package, and shell checks.
-- `nix/image.nix` defines the OCI image, service identities, state volumes,
-  environment, and image metadata.
-- `nix/entrypoint.sh` provides the bootstrap doctor and placeholder supervisor.
-- `tests/smoke.sh` exercises the image through Docker or another configured
-  container runtime.
+- `flake.nix` exposes the OCI image and package checks.
+- `flake.lock` pins every source input.
+- `nix/image.nix` defines the image, identities, volumes, health check, and
+  OCI metadata.
+- `nix/entrypoint.sh` implements supervision, diagnostics, health checks, and
+  shutdown.
+- `nix/packages/` packages WeftMark and Sylvae from their pinned sources.
+- `tests/smoke.sh` verifies the loaded image through Docker.
 - `docs/bootstrap-contract.md` defines integration semantics and acceptance
   criteria.
+- `.github/workflows/ci.yml` checks, builds, loads, and smoke-tests the image.
 
-## Status
+## Current status
 
-**Executable bootstrap.** The Nix-built image definition, separated service
-identities/state directories, doctor command, and container smoke harness now
-exist. Full packaging and supervision of OpenCode, Ollama, Sylvae, and WeftMark
-is the next implementation slice.
+**Core runtime complete.** The reproducible image packages and supervises
+OpenCode, Ollama, Sylvae, and WeftMark. CI validates Nix evaluation, image
+construction, Docker loading, immutable-root operation, Git workspace access,
+correlation input, and all four service health endpoints.
+
+The next milestone is the fail-closed Ephor/KAGP connector described by the
+bootstrap contract.
