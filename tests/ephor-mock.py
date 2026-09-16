@@ -51,7 +51,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self.reply(404, {"error": "not found"})
 
-server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+server = ThreadingHTTPServer((__import__("os").environ.get("EPHOR_MOCK_HOST", "127.0.0.1"), 0), Handler)
 with open(port_file, "w", encoding="utf-8") as f:
     f.write(str(server.server_port))
 server.serve_forever()
