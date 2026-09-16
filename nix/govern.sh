@@ -21,7 +21,7 @@ set +e
 weftmark --repo "$workspace" --ledger "$ledger" --json \
   evidence run "$change_set_id" \
   --id "$evidence_id" \
-  --kind security:governance \
+  --kind governance \
   --cwd "$workspace" \
   --command rebekah-ephor evaluate "${1:-rebekah.change-set.evaluate}" \
   >"$evidence_result"
@@ -31,7 +31,7 @@ weftmark --repo "$workspace" --ledger "$ledger" --json \
   review create "$change_set_id" \
   --id "review-$evidence_id" \
   --author rebekah-ephor \
-  --require security:governance \
+  --require governance \
   >"$review_result"
 review_status="$?"
 set -e
