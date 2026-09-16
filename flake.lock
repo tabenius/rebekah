@@ -41,10 +41,11 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-DLyGLXgygWX/5GJQRAi1pCdtIQaIAzMXnsxGxDD+3ZY=",
+        "lastModified": 1789597707,
+        "narHash": "sha256-/FXERzZNBNHZe1/CmYSkM1olgHdcVzDjxgADhDLlunU=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "ec1efd38dc5e256573dfde9f1f5b445af1f29643",
+        "rev": "e64890d7d7b4078fb163a3724ab2223c14f4d8e7",
         "type": "github"
       },
       "original": {
