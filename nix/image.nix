@@ -1,30 +1,25 @@
-{ lib, dockerTools, bash, coreutils, curl, findutils, gnugrep, jq, procps, tini
-, ollama ? null, opencode ? null }:
+{ dockerTools, bash, coreutils, curl, findutils, git, gnugrep, jq, ollama
+, opencode, procps, tini, util-linux, weftmark, sylvae }:
 
-let
-  entrypoint = ./entrypoint.sh;
-  optionalServices =
-    lib.optional (ollama != null) ollama
-    ++ lib.optional (opencode != null) opencode;
-in
 dockerTools.buildLayeredImage {
   name = "rebekah";
-  tag = "bootstrap";
+  tag = "latest";
 
   contents = [
-    bash
-    coreutils
-    curl
-    findutils
-    gnugrep
-    jq
-    procps
-    tini
-    dockerTools.caCertificates
-  ] ++ optionalServices;
+    bash coreutils curl findutils git gnugrep jq ollama opencode procps sylvae
+    tini util-linux weftmark dockerTools.caCertificates
+  ];
 
   extraCommands = ''
-    mkdir -p etc/rebekah var/lib/rebekah/{ollama,opencode,sylvae,weftmark,ephor} run/rebekah workspace
+    mkdir -p \
+      etc/rebekah \
+      run/rebekah \
+      var/lib/rebekah/ollama \
+      var/lib/rebekah/opencode \
+      var/lib/rebekah/sylvae/runs \
+      var/lib/rebekah/sylvae/skills \
+      var/lib/rebekah/weftmark \
+      workspace
 
     printf '%s\n' \
       'root:x:0:0:root:/root:/bin/bash' \
@@ -33,22 +28,21 @@ dockerTools.buildLayeredImage {
       'opencode:x:10002:10000:OpenCode service:/var/lib/rebekah/opencode:/sbin/nologin' \
       'sylvae:x:10003:10000:Sylvae service:/var/lib/rebekah/sylvae:/sbin/nologin' \
       'weftmark:x:10004:10000:WeftMark service:/var/lib/rebekah/weftmark:/sbin/nologin' \
-      'ephor:x:10005:10000:Ephor connector:/var/lib/rebekah/ephor:/sbin/nologin' \
       > etc/passwd
     printf '%s\n' \
       'root:x:0:' \
-      'rebekah:x:10000:rebekah,ollama,opencode,sylvae,weftmark,ephor' \
+      'rebekah:x:10000:rebekah,ollama,opencode,sylvae,weftmark' \
       > etc/group
 
-    chown 10001:10000 var/lib/rebekah/ollama
-    chown 10002:10000 var/lib/rebekah/opencode
-    chown 10003:10000 var/lib/rebekah/sylvae
-    chown 10004:10000 var/lib/rebekah/weftmark
-    chown 10005:10000 var/lib/rebekah/ephor
+    chown -R 10001:10000 var/lib/rebekah/ollama
+    chown -R 10002:10000 var/lib/rebekah/opencode
+    chown -R 10003:10000 var/lib/rebekah/sylvae
+    chown -R 10004:10000 var/lib/rebekah/weftmark
     chmod 0750 var/lib/rebekah/*
 
-    install -m 0555 ${entrypoint} usr/local/bin/rebekah-entrypoint
+    install -m 0555 ${./entrypoint.sh} usr/local/bin/rebekah-entrypoint
     ln -s rebekah-entrypoint usr/local/bin/rebekah-doctor
+    ln -s rebekah-entrypoint usr/local/bin/rebekah-health
   '';
 
   config = {
@@ -57,18 +51,29 @@ dockerTools.buildLayeredImage {
     Env = [
       "HOME=/var/lib/rebekah"
       "PATH=/usr/local/bin:/bin"
-      "OLLAMA_HOST=127.0.0.1:11434"
       "REBEKAH_STATE_DIR=/var/lib/rebekah"
       "REBEKAH_RUN_DIR=/run/rebekah"
+      "REBEKAH_WORKSPACE=/workspace"
+      "OLLAMA_HOST=127.0.0.1:11434"
+      "OPENCODE_HOST=127.0.0.1"
+      "OPENCODE_PORT=4096"
+      "SYLVAE_HOST=127.0.0.1"
+      "SYLVAE_PORT=8971"
+      "WEFTMARK_HOST=127.0.0.1"
+      "WEFTMARK_PORT=8765"
     ];
     WorkingDir = "/workspace";
-    Volumes = {
-      "/var/lib/rebekah" = { };
-      "/workspace" = { };
+    Volumes = { "/var/lib/rebekah" = { }; "/workspace" = { }; };
+    Healthcheck = {
+      Test = [ "CMD" "/usr/local/bin/rebekah-health" ];
+      Interval = 10000000000;
+      Timeout = 3000000000;
+      Retries = 6;
+      StartPeriod = 30000000000;
     };
     Labels = {
       "org.opencontainers.image.title" = "Rebekah";
-      "org.opencontainers.image.description" = "Bootstrap runtime for governed agentic software work";
+      "org.opencontainers.image.description" = "Runtime for governed agentic software work";
       "org.opencontainers.image.source" = "https://github.com/tabenius/rebekah";
     };
   };
