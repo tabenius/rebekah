@@ -106,7 +106,18 @@ wait_until_healthy() {
 }
 
 serve() {
-  mkdir -p "$run_dir"
+  mkdir -p \
+    "$run_dir" \
+    "$state_dir/ollama" \
+    "$state_dir/opencode" \
+    "$state_dir/sylvae/runs" \
+    "$state_dir/sylvae/skills" \
+    "$state_dir/weftmark"
+  chown -R 10001:10000 "$state_dir/ollama"
+  chown -R 10002:10000 "$state_dir/opencode"
+  chown -R 10003:10000 "$state_dir/sylvae"
+  chown -R 10004:10000 "$state_dir/weftmark"
+  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark}
   doctor
   trap stop_services TERM INT
 
