@@ -41,7 +41,7 @@
           shell = pkgs.runCommand "rebekah-shell-checks" {
             nativeBuildInputs = [ pkgs.shellcheck ];
           } ''
-            shellcheck --severity=warning \\\n              ${./nix/entrypoint.sh} \\\n              ${./nix/ephor-connector.sh} \\\n              ${./tests/ephor-connector.sh} \\\n              ${./tests/smoke.sh}
+            shellcheck --severity=warning ${./nix/entrypoint.sh} ${./nix/ephor-connector.sh} ${./tests/ephor-connector.sh} ${./tests/smoke.sh}
             touch $out
           '';
           inherit (self.packages.${system}) weftmark sylvae;
