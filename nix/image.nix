@@ -13,6 +13,7 @@ dockerTools.buildLayeredImage {
   extraCommands = ''
     mkdir -p \
       etc/rebekah \
+      usr/local/bin \
       run/rebekah \
       var/lib/rebekah/ollama \
       var/lib/rebekah/opencode \
