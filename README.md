@@ -83,8 +83,8 @@ A governed unit of work must remain traceable across participating services:
 | Sylvae | `run_id` |
 | Ephor/KAGP | `entry_id` and `chain_hash` |
 
-Ephor governance decisions should enter WeftMark as typed
-`ephor:governance` evidence. Ephor supplies the policy decision and
+Ephor governance decisions enter WeftMark as typed `governance` evidence
+(record kind `ephor:governance`). Ephor supplies the policy decision and
 tamper-evident chain reference; WeftMark remains responsible for deciding
 whether a Change Set is `READY`.
 
@@ -185,5 +185,7 @@ which calls KAGP's capture/finalize boundary and emits normalized typed evidence
 CI validates approval plus fail-closed denial, hold, malformed-response,
 unavailable-service, and missing-configuration paths.
 
-The next milestone is attaching the connector output to the real WeftMark
-evidence interface and proving that it changes Change Set readiness.
+**Governance attachment complete.** `rebekah-govern` attaches the connector
+output through WeftMark's real evidence interface as dedicated `governance`
+evidence, requires it for the review decision, and the smoke test proves the
+readiness effect.
