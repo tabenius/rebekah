@@ -26,6 +26,7 @@ chmod -R a+rwX "$fixture"
   --name "$name" \
   --read-only \
   --tmpfs /run/rebekah:rw,noexec,nosuid,size=16m \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   -v "$fixture:/workspace" \
   -e REBEKAH_CHANGE_SET_ID=smoke-change-set \
   "$image" >/dev/null
