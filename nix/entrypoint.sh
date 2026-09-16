@@ -46,6 +46,13 @@ doctor() {
     failed=1
   fi
 
+  if command -v rebekah-ephor >/dev/null 2>&1; then
+    printf 'ok      binary/rebekah-ephor\n'
+  else
+    printf 'failed  binary/rebekah-ephor missing\n' >&2
+    failed=1
+  fi
+
   if git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
     printf 'ok      workspace/git-head\n'
   else
