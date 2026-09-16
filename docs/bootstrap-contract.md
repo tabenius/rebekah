@@ -1,6 +1,6 @@
 # Rebekah bootstrap integration contract
 
-Status: **draft v0**
+Status: **implemented through the normalized Ephor evidence boundary (v0)**
 
 This document defines the smallest useful Rebekah integration. It is a
 composition contract, not a claim that every named component already implements
@@ -118,6 +118,27 @@ The bootstrap deployment follows these constraints:
 - evidence states distinguish `missing`, `unsupported`, `unavailable`,
   `failed`, and `passed`.
 
+## Implemented Ephor transport
+
+`rebekah-ephor` implements the transport boundary against KAGP's Rust
+`governance-http` bridge by default:
+
+- `POST /capture` records the correlated Change Set action;
+- `POST /finalize` closes the entry and returns its audit-chain hash;
+- `EPHOR_API_STYLE=worker` selects the Cloudflare Worker finalize route;
+- `EPHOR_AUTH_TOKEN` is injected only at runtime as a bearer token;
+- returned hashes are validated and normalized to `sha256:<hex>`;
+- typed evidence is written for both success and failure paths.
+
+Only an affirmative, structurally valid capture followed by a structurally valid
+finalization can emit `state: passed`. Denial, human-approval hold, unavailable
+transport, malformed JSON, missing identifiers, and invalid hashes emit a
+non-passed state and return a nonzero exit status.
+
+The remaining adapter work is WeftMark-owned schema discovery and attachment:
+the normalized record must be submitted through WeftMark's real evidence API,
+then demonstrated to affect Change Set readiness.
+
 ## Bootstrap smoke test
 
 The first milestone is complete when an automated test can demonstrate:
@@ -154,6 +175,7 @@ boundaries.
     └── smoke/
 ```
 
-The next implementation slice should establish the flake, a minimal Nix-built
-container image, service accounts/directories, and a smoke check before adding
-full component configuration.
+The flake, Nix-built image, isolated service identities, core service smoke
+check, and fail-closed Ephor transport now exist. The next slice attaches the
+normalized governance record through WeftMark's real evidence interface and
+verifies its readiness effect.
