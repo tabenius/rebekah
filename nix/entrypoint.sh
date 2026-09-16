@@ -65,6 +65,16 @@ doctor() {
   else
     printf 'pending correlation/change_set_id\n'
   fi
+  if [[ -n "${REBEKAH_OPENCODE_SESSION_ID:-}" ]]; then
+    printf 'ok      correlation/opencode_session_id=%s\n' "$REBEKAH_OPENCODE_SESSION_ID"
+  else
+    printf 'pending correlation/opencode_session_id\n'
+  fi
+  if [[ -n "${REBEKAH_SYLVAE_RUN_ID:-}" ]]; then
+    printf 'ok      correlation/sylvae_run_id=%s\n' "$REBEKAH_SYLVAE_RUN_ID"
+  else
+    printf 'pending correlation/sylvae_run_id\n'
+  fi
   return "$failed"
 }
 
@@ -117,6 +127,41 @@ wait_until_healthy() {
   return 1
 }
 
+seed_ledger() {
+  local ledger="$state_dir/weftmark/ledger.jsonl"
+  local change_set_id="${REBEKAH_CHANGE_SET_ID:-}"
+  if [[ -z "${REBEKAH_SEED_LEDGER:-}" ]]; then
+    return 0
+  fi
+  if [[ -z "$change_set_id" ]]; then
+    printf 'rebekah: REBEKAH_SEED_LEDGER requires REBEKAH_CHANGE_SET_ID\n' >&2
+    return 1
+  fi
+  if [[ -s "$ledger" ]]; then
+    printf 'rebekah: seeded ledger already exists, skipping\n'
+    return 0
+  fi
+  printf 'rebekah: seeding WeftMark ledger with Change Set %s\n' "$change_set_id"
+  mkdir -p "$(dirname "$ledger")"
+  chown 10004:10000 "$(dirname "$ledger")"
+  if ! HOME="$state_dir/weftmark" setpriv \
+    --reuid 10004 --regid 10000 --clear-groups --no-new-privs -- \
+    weftmark --repo "$workspace" --ledger "$ledger" --json \
+    changeset create "$change_set_id" \
+    --goal "Seeded by Rebekah" --scope "contract:governance"; then
+    printf 'rebekah: failed to seed Change Set %s\n' "$change_set_id" >&2
+    return 1
+  fi
+  if ! HOME="$state_dir/weftmark" setpriv \
+    --reuid 10004 --regid 10000 --clear-groups --no-new-privs -- \
+    weftmark --repo "$workspace" --ledger "$ledger" --json \
+    task plan import --source-label rebekah-bootstrap >/dev/null 2>&1; then
+    printf 'rebekah: no source plans to import, continuing without plan cards\n' >&2
+  fi
+  printf 'rebekah: WeftMark ledger seeded\n'
+  return 0
+}
+
 serve() {
   mkdir -p \
     "$run_dir" \
@@ -131,6 +176,7 @@ serve() {
   chown -R 10004:10000 "$state_dir/weftmark"
   chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark}
   doctor
+  seed_ledger
   trap stop_services TERM INT
 
   OLLAMA_MODELS="$state_dir/ollama/models" \
