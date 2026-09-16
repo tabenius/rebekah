@@ -6,6 +6,12 @@ image="${REBEKAH_IMAGE:-rebekah:latest}"
 runtime="${CONTAINER_RUNTIME:-docker}"
 name="rebekah-smoke-$BASHPID"
 fixture="$(mktemp -d)"
+# Scratch dir kept OUTSIDE the fixture: the fixture is bind-mounted as the
+# container's /workspace, and WeftMark's evidence run requires a clean git
+# worktree. Any host-side scratch file (e.g. the mock port file) written into
+# the fixture would appear as an untracked file and make the governance
+# evidence step fail with "requires a clean worktree".
+scratch="$(mktemp -d)"
 mock_pid=""
 
 cleanup() {
@@ -14,7 +20,7 @@ cleanup() {
     wait "$mock_pid" 2>/dev/null || true
   fi
   "$runtime" rm -f "$name" >/dev/null 2>&1 || true
-  rm -rf -- "$fixture"
+  rm -rf -- "$fixture" "$scratch"
 }
 trap cleanup EXIT INT TERM
 
@@ -26,7 +32,7 @@ git -C "$fixture" add README.md
 git -C "$fixture" commit -qm "fixture"
 chmod -R a+rwX "$fixture"
 
-port_file="$fixture/ephor-port"
+port_file="$scratch/ephor-port"
 EPHOR_MOCK_HOST=0.0.0.0 python3 "$repo_root/tests/ephor-mock.py" pass "$port_file" &
 mock_pid="$!"
 for _ in $(seq 1 50); do
