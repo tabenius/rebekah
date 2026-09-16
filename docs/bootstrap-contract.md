@@ -1,7 +1,7 @@
 # Rebekah bootstrap integration contract
 
 Status: **implemented through the normalized Ephor evidence boundary (v0)** —
-attachment uses WeftMark's dedicated `governance` evidence kind
+attachment uses WeftMark's dedicated `security:governance` evidence kind
 
 This document defines the smallest useful Rebekah integration. It is a
 composition contract, not a claim that every named component already implements
@@ -82,14 +82,14 @@ evaluated_at: ...
 ```
 
 `ephor:governance` is the record kind owned by Rebekah/Ephor. WeftMark attaches
-the record as its dedicated first-class `governance` evidence kind via
-`weftmark evidence run --kind governance`; the record schema remains
+the record under its dedicated `security:governance` evidence kind via
+`weftmark evidence run --kind security:governance`; the record schema remains
 WeftMark-owned and the example records the semantic requirements Rebekah must
 preserve when adapters are implemented.
 
-A WeftMark evidence policy may require `governance` evidence in `passed` state
-before a high-risk Change Set can become `READY`. Ephor supplies the policy
-decision and chain reference; WeftMark decides readiness.
+A WeftMark evidence policy may require `security:governance` evidence in
+`passed` state before a high-risk Change Set can become `READY`. Ephor supplies
+the policy decision and chain reference; WeftMark decides readiness.
 
 ## Semantic scope to risk
 
@@ -140,10 +140,10 @@ transport, malformed JSON, missing identifiers, and invalid hashes emit a
 non-passed state and return a nonzero exit status.
 
 Attachment is implemented: `rebekah-govern` submits the normalized record through
-WeftMark's real evidence API as dedicated `governance` evidence
-(`--kind governance`), requires `governance` evidence in `passed` state for the
-review decision, and the smoke test demonstrates the effect on Change Set
-readiness.
+WeftMark's real evidence API as dedicated `security:governance` evidence
+(`--kind security:governance`), requires `security:governance` evidence in
+`passed` state for the review decision, and the smoke test demonstrates the
+effect on Change Set readiness.
 
 ## Bootstrap smoke test
 
