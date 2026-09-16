@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check flake
+        run: nix flake check --print-build-logs
+      - name: Build image
+        run: nix build .#image --print-build-logs
+      - name: Load image
+        run: docker load < result
+      - name: Smoke test
+        run: bash tests/smoke.sh
