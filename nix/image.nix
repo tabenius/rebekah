@@ -34,10 +34,6 @@ dockerTools.buildLayeredImage {
       'rebekah:x:10000:rebekah,ollama,opencode,sylvae,weftmark' \
       > etc/group
 
-    chown -R 10001:10000 var/lib/rebekah/ollama
-    chown -R 10002:10000 var/lib/rebekah/opencode
-    chown -R 10003:10000 var/lib/rebekah/sylvae
-    chown -R 10004:10000 var/lib/rebekah/weftmark
     chmod 0750 var/lib/rebekah/*
 
     install -m 0555 ${./entrypoint.sh} usr/local/bin/rebekah-entrypoint
