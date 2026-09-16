@@ -30,7 +30,7 @@ The current image contains:
 - **[Sylvae](https://github.com/tabenius/sylvae)** — portable `SKILL.md`
   execution with durable run evidence.
 
-The **Ephor/KAGP connector** is the next integration boundary. Ephor is the
+The image also includes the fail-closed **Ephor/KAGP connector**. Ephor is the
 **Konsonans AI Governance Platform (KAGP)**, maintained in
 [`tabenius/BAZ.AI-governance`](https://github.com/tabenius/BAZ.AI-governance).
 
@@ -42,7 +42,7 @@ The **Ephor/KAGP connector** is the next integration boundary. Ephor is the
 | Ollama | Local model inference | Packaged and supervised |
 | Sylvae | Skill execution and run evidence | Packaged and supervised |
 | WeftMark | Engineering provenance, review, evidence policy, and readiness | Packaged and supervised |
-| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records | Connector planned |
+| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records | Fail-closed connector implemented |
 | Rebekah | Packaging, isolation, wiring, lifecycle, and integration verification | Implemented bootstrap |
 
 Each runtime service has a distinct UID and state directory. The supervisor
@@ -132,6 +132,24 @@ docker run --rm --mount type=bind,src="$PWD",dst=/workspace rebekah:latest docto
 docker exec <container-name> rebekah-health
 ```
 
+## Ephor/KAGP governance
+
+Configure the local Rust `governance-http` bridge and evaluate a Change Set:
+
+```bash
+export EPHOR_URL=http://127.0.0.1:9800
+export REBEKAH_CHANGE_SET_ID=cs-example
+export REBEKAH_SYLVAE_RUN_ID=run-example
+rebekah-ephor evaluate
+```
+
+For the Cloudflare Worker API, also set `EPHOR_API_STYLE=worker`. An optional
+`EPHOR_AUTH_TOKEN` is sent as a bearer token. Successful evaluations produce
+`cc.ragbaz.rebekah.governance-evidence.v0` JSON with the Ephor entry ID and a
+normalized `sha256:` chain hash. Every denial, hold, transport error, malformed
+response, invalid hash, or missing configuration exits nonzero and records a
+non-passed evidence state.
+
 ## Verify
 
 After loading the image, run the same immutable-root integration test used by
@@ -157,14 +175,15 @@ four services.
 - `tests/smoke.sh` verifies the loaded image through Docker.
 - `docs/bootstrap-contract.md` defines integration semantics and acceptance
   criteria.
-- `.github/workflows/ci.yml` checks, builds, loads, and smoke-tests the image.
+- `.github/workflows/ci.yml` checks the connector, builds and loads the image, and runs the service smoke test.
 
 ## Current status
 
 **Core runtime complete.** The reproducible image packages and supervises
-OpenCode, Ollama, Sylvae, and WeftMark. CI validates Nix evaluation, image
-construction, Docker loading, immutable-root operation, Git workspace access,
-correlation input, and all four service health endpoints.
+OpenCode, Ollama, Sylvae, and WeftMark. The image also provides `rebekah-ephor`,
+which calls KAGP's capture/finalize boundary and emits normalized typed evidence.
+CI validates approval plus fail-closed denial, hold, malformed-response,
+unavailable-service, and missing-configuration paths.
 
-The next milestone is the fail-closed Ephor/KAGP connector described by the
-bootstrap contract.
+The next milestone is attaching the connector output to the real WeftMark
+evidence interface and proving that it changes Change Set readiness.
