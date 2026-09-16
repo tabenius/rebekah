@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 state_dir="${REBEKAH_STATE_DIR:-/var/lib/rebekah}"
