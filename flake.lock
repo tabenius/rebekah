@@ -1,0 +1,59 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "narHash": "sha256-zVxLZiSnmaaPLwnhj7pwmqe3axBg/C6nG5JZsJMh2g4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "b1b875982b17dabde9b4a37f3e229e74913e6db3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "sylvae-src": "sylvae-src",
+        "weftmark-src": "weftmark-src"
+      }
+    },
+    "sylvae-src": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-Re0XeNXWruUKhXnRxzETRxrQwuIvnfbeA0H8JFebwfQ=",
+        "owner": "tabenius",
+        "repo": "sylvae",
+        "rev": "55f9491c394a54112d2ad39a8720c0b85f015d6c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tabenius",
+        "ref": "master",
+        "repo": "sylvae",
+        "type": "github"
+      }
+    },
+    "weftmark-src": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-DLyGLXgygWX/5GJQRAi1pCdtIQaIAzMXnsxGxDD+3ZY=",
+        "owner": "tabenius",
+        "repo": "WeftMark",
+        "rev": "ec1efd38dc5e256573dfde9f1f5b445af1f29643",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tabenius",
+        "repo": "WeftMark",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
