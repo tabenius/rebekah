@@ -11,9 +11,13 @@
       url = "github:tabenius/sylvae/master";
       flake = false;
     };
+    ephor-src = {
+      url = "github:tabenius/BAZ.AI-governance";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, weftmark-src, sylvae-src }:
+  outputs = { self, nixpkgs, weftmark-src, sylvae-src, ephor-src }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;

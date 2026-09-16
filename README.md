@@ -102,7 +102,10 @@ nix build .#image
 docker load < result
 ```
 
-The flake lock pins nixpkgs, WeftMark, and Sylvae for reproducible evaluation.
+The flake lock pins nixpkgs, WeftMark, Sylvae, and the BAZ.AI-governance
+(Ephor/KAGP) source for reproducible evaluation. If `ephor-src` is not yet in
+your local `flake.lock`, run `nix flake lock` (or `nix flake update ephor-src`)
+once to record the pin.
 
 ## Run
 
