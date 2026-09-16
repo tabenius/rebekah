@@ -178,6 +178,8 @@ four services.
 - `tests/smoke.sh` verifies the loaded image through Docker.
 - `docs/bootstrap-contract.md` defines integration semantics and acceptance
   criteria.
+- `docs/ephor-governance-worker.md` references the merged Ephor governance
+  Worker (endpoints, bindings, audit chain) the connector calls into.
 - `.github/workflows/ci.yml` checks the connector, builds and loads the image, and runs the service smoke test.
 
 ## Current status
@@ -191,4 +193,6 @@ unavailable-service, and missing-configuration paths.
 **Governance attachment complete.** `rebekah-govern` attaches the connector
 output through WeftMark's real evidence interface as dedicated `governance`
 evidence, requires it for the review decision, and the smoke test proves the
-readiness effect.
+readiness effect. See
+[docs/ephor-governance-worker.md](docs/ephor-governance-worker.md) for the
+merged reference implementation the connector calls into.
