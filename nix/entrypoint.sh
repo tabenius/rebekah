@@ -93,8 +93,8 @@ stop_services() {
 }
 
 wait_until_healthy() {
-  local attempt
-  for attempt in $(seq 1 "${REBEKAH_STARTUP_ATTEMPTS:-60}"); do
+  local _
+  for _ in $(seq 1 "${REBEKAH_STARTUP_ATTEMPTS:-60}"); do
     if health >/dev/null 2>&1; then
       health
       return 0
