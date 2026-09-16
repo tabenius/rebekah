@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 image="${REBEKAH_IMAGE:-rebekah:latest}"
 runtime="${CONTAINER_RUNTIME:-docker}"
-name="rebekah-smoke-$"
+name="rebekah-smoke-$BASHPID"
 fixture="$(mktemp -d)"
 mock_pid=""
 
