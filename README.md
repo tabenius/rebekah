@@ -11,54 +11,105 @@
 </p>
 
 > [!IMPORTANT]
-> Rebekah is at the beginning of its design and implementation. The architecture
-> below describes the initial direction, not a production-ready release.
+> Rebekah is in its bootstrap phase. The architecture below is an implementation
+> direction, not a production-readiness claim.
 
 ## Purpose
 
-Rebekah will compose a Docker container based on **NixOS** that brings together
-local model serving, agent execution, and durable evidence about software work.
+Rebekah composes a Docker-compatible container built with **Nix/NixOS tooling**
+that brings together local inference, agent execution, engineering provenance,
+and governance evidence.
 
 The first integration target is deliberately small:
 
-- **OpenCode server** — the provider-neutral agent interface and remote session
-  surface.
-- **Ollama server** — local model serving.
-- **[WeftMark](https://github.com/tabenius/WeftMark)** — the vendor-neutral
-  control plane for scope, Git lineage, evidence, handoff, review, and
-  merge/release readiness.
-- **[Sylvae](https://github.com/tabenius/sylvae)** — execution of portable
-  `SKILL.md` workflows across supported agent runtimes, with durable evidence.
+- **OpenCode server** — provider-neutral interactive agent sessions.
+- **Ollama server** — local model inference.
+- **[WeftMark](https://github.com/tabenius/WeftMark)** — Change Sets, semantic
+  scopes, Git lineage, evidence, handoff, review, and merge/release readiness.
+- **[Sylvae](https://github.com/tabenius/sylvae)** — portable `SKILL.md`
+  execution with durable run evidence.
+- **Ephor/KAGP connector** — policy evaluation, risk classification, human
+  oversight, and tamper-evident governance records.
 
-Rebekah is intended to provide the reproducible runtime in which these
-components can work together. It will not replace their individual domains or
-make a Kanban interface, agent runtime, or model provider the source of truth.
+Rebekah owns reproducible composition, isolation, service wiring, lifecycle,
+and end-to-end verification. It does not replace the domains of the components
+it runs or create another source of truth.
 
-## Related governance project
+## System boundary
+
+| Component | Authoritative responsibility |
+| --- | --- |
+| OpenCode | Interactive agent sessions and workspace access |
+| Ollama | Local model inference |
+| Sylvae | Skill execution and run evidence |
+| WeftMark | Engineering provenance, review, evidence policy, and readiness |
+| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records |
+| Rebekah | Packaging, isolation, wiring, lifecycle, and integration verification |
 
 **Ephor** is the **Konsonans AI Governance Platform (KAGP)**. Its repository is
 [`tabenius/BAZ.AI-governance`](https://github.com/tabenius/BAZ.AI-governance).
 
-Rebekah is the dedicated composition and runtime repository. Governance policy,
-runtime orchestration, execution evidence, and change provenance should remain
-separable even when they are deployed together.
+## Correlation spine
 
-## Initial architecture
+A governed unit of work must remain traceable across all participating services:
 
 ```text
-Rebekah (NixOS-based container)
-├── OpenCode server
-├── Ollama server
-├── WeftMark
-└── Sylvae
+WeftMark Change Set ID
+        │
+        ├── OpenCode session ID
+        ├── Sylvae run_id
+        └── Ephor entry_id
+                └── chain_hash
 ```
 
-The first milestone is a reproducible development container in which all four
-components can start, discover their required local services, and expose only
-explicitly configured interfaces.
+The WeftMark Change Set is the workflow subject. Provider-specific identifiers
+remain correlated attributes rather than competing identities.
+
+Ephor governance decisions should enter WeftMark as typed
+`ephor:governance` evidence. Ephor supplies the policy decision and
+tamper-evident chain reference; WeftMark remains responsible for deciding
+whether a Change Set is `READY`.
+
+See the [bootstrap integration contract](docs/bootstrap-contract.md) for the
+initial correlation envelope, deployment boundary, evidence shape, and
+acceptance test.
+
+## Initial deployment shape
+
+```text
+Rebekah · Nix-built container
+├── supervised services
+│   ├── Ollama
+│   ├── OpenCode
+│   ├── Sylvae
+│   └── WeftMark
+├── Ephor/KAGP connector
+├── shared correlation envelope
+├── isolated persistent state
+└── end-to-end smoke test
+```
+
+Internal services should bind only to loopback or a private container network.
+Remote access belongs behind an authenticated TLS proxy or secure tunnel.
+Secrets must be injected at runtime and must not enter the image or Nix store.
+
+## First milestone
+
+The bootstrap milestone is one reproducible test flow:
+
+```text
+Change Set
+  → correlated OpenCode/Sylvae execution
+  → Ephor policy record and chain hash
+  → typed WeftMark evidence
+  → readiness decision
+```
+
+The test must also prove that missing, unavailable, or failed governance cannot
+silently become approved evidence.
 
 ## Status
 
-**Bootstrap phase.** The repository currently records the initial product
-boundary. Container definitions, pinned dependencies, service configuration,
-and verification will follow.
+**Bootstrap phase.** The product boundary and draft integration contract exist.
+The next slice is the Nix flake, minimal container image, service
+accounts/directories, and smoke-test harness.
