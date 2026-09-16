@@ -9,8 +9,9 @@ python3Packages.buildPythonApplication {
   build-system = [ python3Packages.hatchling ];
   dependencies = with python3Packages; [ anthropic litellm pyyaml ];
 
+  nativeCheckInputs = [ python3Packages.pytestCheckHook ];
+
   pythonImportsCheck = [ "sylvae" "sylvae.review" ];
-  doCheck = false;
 
   meta = {
     description = "Portable skill runner across agent backends";

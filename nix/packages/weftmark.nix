@@ -11,7 +11,6 @@ python3Packages.buildPythonApplication {
   nativeCheckInputs = [ git python3Packages.pytestCheckHook ];
 
   pythonImportsCheck = [ "weftmark" "weftmark.http.server" ];
-  doCheck = false;
 
   postInstall = ''
     makeWrapper ${python3Packages.python.interpreter} $out/bin/weftmark-http \
