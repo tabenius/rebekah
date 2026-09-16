@@ -37,13 +37,14 @@ stop_server() {
 }
 
 run_case() {
-  local mode="$1" expected_state="$2" expected_exit="$3"
+  local mode="$1" expected_state="$2" expected_exit="$3" api_style="${4:-governance-http}"
   local evidence="$fixture/$mode.json"
   start_server "$mode"
   set +e
   REBEKAH_CHANGE_SET_ID=cs-test \
   REBEKAH_SYLVAE_RUN_ID=run-test \
   REBEKAH_GOVERNANCE_EVIDENCE="$evidence" \
+  EPHOR_API_STYLE="$api_style" \
     bash "$connector" evaluate >/dev/null 2>&1
   local actual_exit="$?"
   set -e
@@ -62,6 +63,31 @@ run_case deny failed nonzero
 run_case hold failed nonzero
 run_case malformed failed nonzero
 run_case http-error unavailable nonzero
+run_case pass passed zero worker
+run_case invalid-hash failed nonzero governance-http
+run_case invalid-hash failed nonzero worker
+
+evidence="$fixture/missing-csid.json"
+start_server pass
+set +e
+REBEKAH_GOVERNANCE_EVIDENCE="$evidence" \
+  bash "$connector" evaluate >/dev/null 2>&1
+status="$?"
+set -e
+stop_server
+[[ "$status" -ne 0 ]]
+jq -e '.state == "failed" and .reason == "REBEKAH_CHANGE_SET_ID is required"' "$evidence" >/dev/null
+
+evidence="$fixture/unsupported-style.json"
+start_server pass
+set +e
+REBEKAH_CHANGE_SET_ID=cs-test REBEKAH_GOVERNANCE_EVIDENCE="$evidence" \
+  EPHOR_API_STYLE=magic bash "$connector" evaluate >/dev/null 2>&1
+status="$?"
+set -e
+stop_server
+[[ "$status" -ne 0 ]]
+jq -e '.state == "failed" and .reason == "Unsupported EPHOR_API_STYLE: magic"' "$evidence" >/dev/null
 
 unset EPHOR_URL
 evidence="$fixture/unconfigured.json"

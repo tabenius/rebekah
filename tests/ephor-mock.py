@@ -44,9 +44,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": "missing fields"})
             return self.reply(200, {"entry_id": entry_id, "hash": chain_hash, "accepted": True})
 
+        if self.path.startswith("/capture/") and self.path.endswith("/finalize"):
+            if mode == "invalid-hash":
+                return self.reply(200, {"hash": "bogus-not-a-chain-hash", "accepted": True})
+            return self.reply(200, {"hash": chain_hash, "accepted": True})
+
         if self.path == "/finalize":
             if body.get("entry_id") != entry_id or body.get("outcome") != "success":
                 return self.reply(400, {"error": "invalid finalization"})
+            if mode == "invalid-hash":
+                return self.reply(200, {"hash": "bogus-not-a-chain-hash", "accepted": True})
             return self.reply(200, {"hash": chain_hash, "accepted": True})
 
         self.reply(404, {"error": "not found"})
