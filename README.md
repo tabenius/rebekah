@@ -108,8 +108,42 @@ Change Set
 The test must also prove that missing, unavailable, or failed governance cannot
 silently become approved evidence.
 
+## Build the bootstrap image
+
+Nix with flakes enabled is required.
+
+```bash
+nix flake check
+nix build .#image
+docker load < result
+docker run --rm rebekah:bootstrap doctor
+```
+
+Run the container smoke test after loading the image:
+
+```bash
+tests/smoke.sh
+```
+
+The image currently validates its filesystem, service-state boundaries, and
+Change Set correlation input. It reports a component binary as `pending` when
+that component has not yet been packaged; pending never means healthy or
+approved.
+
+## Repository layout
+
+- `flake.nix` defines supported systems, the image package, and shell checks.
+- `nix/image.nix` defines the OCI image, service identities, state volumes,
+  environment, and image metadata.
+- `nix/entrypoint.sh` provides the bootstrap doctor and placeholder supervisor.
+- `tests/smoke.sh` exercises the image through Docker or another configured
+  container runtime.
+- `docs/bootstrap-contract.md` defines integration semantics and acceptance
+  criteria.
+
 ## Status
 
-**Bootstrap phase.** The product boundary and draft integration contract exist.
-The next slice is the Nix flake, minimal container image, service
-accounts/directories, and smoke-test harness.
+**Executable bootstrap.** The Nix-built image definition, separated service
+identities/state directories, doctor command, and container smoke harness now
+exist. Full packaging and supervision of OpenCode, Ollama, Sylvae, and WeftMark
+is the next implementation slice.
