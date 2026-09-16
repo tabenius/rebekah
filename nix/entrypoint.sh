@@ -13,6 +13,11 @@ sylvae_port="${SYLVAE_PORT:-8971}"
 weftmark_host="${WEFTMARK_HOST:-127.0.0.1}"
 weftmark_port="${WEFTMARK_PORT:-8765}"
 
+# Treat the explicitly mounted workspace as trusted across service UIDs.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0="$workspace"
+
 service_names=(ollama opencode sylvae weftmark)
 pids=()
 
