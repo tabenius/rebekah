@@ -22,17 +22,25 @@ dockerTools.buildLayeredImage {
       var/lib/rebekah/weftmark \
       workspace
 
+    # Each service gets its own primary group (gid == uid) so a 0750 state
+    # directory grants group access only to the owning service. A single shared
+    # group (with every service as a member) would let any service read every
+    # other service's state directory, defeating the per-UID isolation.
     printf '%s\n' \
       'root:x:0:0:root:/root:/bin/bash' \
       'rebekah:x:10000:10000:Rebekah supervisor:/var/lib/rebekah:/sbin/nologin' \
-      'ollama:x:10001:10000:Ollama service:/var/lib/rebekah/ollama:/sbin/nologin' \
-      'opencode:x:10002:10000:OpenCode service:/var/lib/rebekah/opencode:/sbin/nologin' \
-      'sylvae:x:10003:10000:Sylvae service:/var/lib/rebekah/sylvae:/sbin/nologin' \
-      'weftmark:x:10004:10000:WeftMark service:/var/lib/rebekah/weftmark:/sbin/nologin' \
+      'ollama:x:10001:10001:Ollama service:/var/lib/rebekah/ollama:/sbin/nologin' \
+      'opencode:x:10002:10002:OpenCode service:/var/lib/rebekah/opencode:/sbin/nologin' \
+      'sylvae:x:10003:10003:Sylvae service:/var/lib/rebekah/sylvae:/sbin/nologin' \
+      'weftmark:x:10004:10004:WeftMark service:/var/lib/rebekah/weftmark:/sbin/nologin' \
       > etc/passwd
     printf '%s\n' \
       'root:x:0:' \
-      'rebekah:x:10000:rebekah,ollama,opencode,sylvae,weftmark' \
+      'rebekah:x:10000:' \
+      'ollama:x:10001:' \
+      'opencode:x:10002:' \
+      'sylvae:x:10003:' \
+      'weftmark:x:10004:' \
       > etc/group
 
     chmod 0750 var/lib/rebekah/*

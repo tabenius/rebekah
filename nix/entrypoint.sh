@@ -97,11 +97,14 @@ health() {
   return "$failed"
 }
 
+# Services run with gid == uid (their own primary group), matching the
+# per-service groups baked into /etc/group, so no service shares a group with
+# another.
 run_as() {
   local uid="$1" home="$2"
   shift 2
   HOME="$home" setpriv \
-    --reuid "$uid" --regid 10000 --clear-groups --no-new-privs -- "$@" &
+    --reuid "$uid" --regid "$uid" --clear-groups --no-new-privs -- "$@" &
   pids+=("$!")
 }
 
@@ -143,9 +146,9 @@ seed_ledger() {
   fi
   printf 'rebekah: seeding WeftMark ledger with Change Set %s\n' "$change_set_id"
   mkdir -p "$(dirname "$ledger")"
-  chown 10004:10000 "$(dirname "$ledger")"
+  chown 10004:10004 "$(dirname "$ledger")"
   if ! HOME="$state_dir/weftmark" setpriv \
-    --reuid 10004 --regid 10000 --clear-groups --no-new-privs -- \
+    --reuid 10004 --regid 10004 --clear-groups --no-new-privs -- \
     weftmark --repo "$workspace" --ledger "$ledger" --json \
     changeset create "$change_set_id" \
     --goal "Seeded by Rebekah" --scope "contract:governance"; then
@@ -153,7 +156,7 @@ seed_ledger() {
     return 1
   fi
   if ! HOME="$state_dir/weftmark" setpriv \
-    --reuid 10004 --regid 10000 --clear-groups --no-new-privs -- \
+    --reuid 10004 --regid 10004 --clear-groups --no-new-privs -- \
     weftmark --repo "$workspace" --ledger "$ledger" --json \
     task plan import --source-label rebekah-bootstrap >/dev/null 2>&1; then
     printf 'rebekah: no source plans to import, continuing without plan cards\n' >&2
@@ -170,10 +173,10 @@ serve() {
     "$state_dir/sylvae/runs" \
     "$state_dir/sylvae/skills" \
     "$state_dir/weftmark"
-  chown -R 10001:10000 "$state_dir/ollama"
-  chown -R 10002:10000 "$state_dir/opencode"
-  chown -R 10003:10000 "$state_dir/sylvae"
-  chown -R 10004:10000 "$state_dir/weftmark"
+  chown -R 10001:10001 "$state_dir/ollama"
+  chown -R 10002:10002 "$state_dir/opencode"
+  chown -R 10003:10003 "$state_dir/sylvae"
+  chown -R 10004:10004 "$state_dir/weftmark"
   chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark}
   doctor
   seed_ledger

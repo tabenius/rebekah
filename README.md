@@ -45,10 +45,11 @@ The image also includes the fail-closed **Ephor/KAGP connector**. Ephor is the
 | Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records | Fail-closed connector implemented |
 | Rebekah | Packaging, isolation, wiring, lifecycle, and integration verification | Implemented bootstrap |
 
-Each runtime service has a distinct UID and state directory. The supervisor
-starts services with `no-new-privileges`, binds them to container loopback, checks
-their real health endpoints, forwards termination, and fails when any required
-service exits.
+Each runtime service has a distinct UID, a distinct primary group (gid == uid),
+and its own state directory, so a `0750` state directory is readable only by the
+owning service. The supervisor starts services with `no-new-privileges` and
+`--clear-groups`, binds them to container loopback, checks their real health
+endpoints, forwards termination, and fails when any required service exits.
 
 ## Runtime topology
 
@@ -135,6 +136,14 @@ docker run --rm \
 The entrypoint initializes volume ownership for the four isolated service UIDs.
 The mounted workspace is the only Git safe-directory exception configured by
 the runtime.
+
+The image ships **no model weights** — Ollama starts with an empty model store.
+Pull a model into the persistent state volume before requesting inference; it is
+retained across runs on the `rebekah-state` volume:
+
+```bash
+docker exec <container-name> ollama pull llama3.2
+```
 
 Useful diagnostics:
 
