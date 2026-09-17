@@ -125,6 +125,14 @@ evaluate() {
     fail_closed failed "Ephor capture response omitted entry_id"
     return 1
   fi
+  # entry_id is interpolated into the worker finalize URL path
+  # ("$ephor_url/capture/$entry_id/finalize"). Constrain it to a safe token so a
+  # hostile or buggy Ephor response cannot rewrite the request path (e.g. with
+  # "../" or a query/fragment).
+  if [[ ! "$entry_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    fail_closed failed "Ephor capture response returned a malformed entry_id"
+    return 1
+  fi
   if [[ "$decision" == "hold" ]]; then
     fail_closed failed "Ephor requires human approval" "$entry_id"
     return 1

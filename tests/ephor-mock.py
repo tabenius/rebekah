@@ -35,6 +35,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"not-json")
                 return
+            if mode == "bad-entry-id":
+                return self.reply(200, {"entry_id": "../../evil", "accepted": True})
             if mode == "deny":
                 return self.reply(200, {"entry_id": entry_id, "accepted": False})
             if mode == "hold":
