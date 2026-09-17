@@ -10,11 +10,6 @@ sylvae_run_id="${REBEKAH_SYLVAE_RUN_ID:-}"
 agent_class="${EPHOR_AGENT_CLASS:-RebekahAgent}"
 policy_revision="${EPHOR_POLICY_REVISION:-unknown}"
 timeout="${EPHOR_TIMEOUT_SECONDS:-10}"
-auth_args=()
-
-if [[ -n "${EPHOR_AUTH_TOKEN:-}" ]]; then
-  auth_args=(-H "Authorization: Bearer $EPHOR_AUTH_TOKEN")
-fi
 
 write_evidence() {
   local state="$1" entry_id="${2:-}" chain_hash="${3:-}" reason="${4:-}"
@@ -53,10 +48,22 @@ fail_closed() {
 
 post_json() {
   local url="$1" body="$2"
-  curl --fail --silent --show-error \
-    --connect-timeout "$timeout" --max-time "$timeout" \
-    -H "Content-Type: application/json" "${auth_args[@]}" \
-    --data "$body" "$url"
+  # When an auth token is configured, pass it through a curl config read from
+  # stdin rather than on the command line. A bearer token in argv is readable
+  # via /proc/<pid>/cmdline by the isolated service UIDs, leaking the
+  # governance credential across the containment boundary.
+  if [[ -n "${EPHOR_AUTH_TOKEN:-}" ]]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$EPHOR_AUTH_TOKEN" | \
+      curl --config - --fail --silent --show-error \
+        --connect-timeout "$timeout" --max-time "$timeout" \
+        -H "Content-Type: application/json" \
+        --data "$body" "$url"
+  else
+    curl --fail --silent --show-error \
+      --connect-timeout "$timeout" --max-time "$timeout" \
+      -H "Content-Type: application/json" \
+      --data "$body" "$url"
+  fi
 }
 
 evaluate() {
