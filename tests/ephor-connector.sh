@@ -59,6 +59,7 @@ run_case() {
 }
 
 run_case pass passed zero
+run_case bad-entry-id failed nonzero
 run_case deny failed nonzero
 run_case hold failed nonzero
 run_case malformed failed nonzero
