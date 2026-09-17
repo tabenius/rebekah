@@ -52,14 +52,17 @@ post_json() {
   # stdin rather than on the command line. A bearer token in argv is readable
   # via /proc/<pid>/cmdline by the isolated service UIDs, leaking the
   # governance credential across the containment boundary.
+  # --proto '=http,https' keeps curl from being coerced into other schemes
+  # (file:, gopher:, scp: ...) if EPHOR_URL is ever influenced; no -L is used,
+  # so redirects are never followed.
   if [[ -n "${EPHOR_AUTH_TOKEN:-}" ]]; then
     printf 'header = "Authorization: Bearer %s"\n' "$EPHOR_AUTH_TOKEN" | \
-      curl --config - --fail --silent --show-error \
+      curl --config - --fail --silent --show-error --proto '=http,https' \
         --connect-timeout "$timeout" --max-time "$timeout" \
         -H "Content-Type: application/json" \
         --data "$body" "$url"
   else
-    curl --fail --silent --show-error \
+    curl --fail --silent --show-error --proto '=http,https' \
       --connect-timeout "$timeout" --max-time "$timeout" \
       -H "Content-Type: application/json" \
       --data "$body" "$url"
@@ -72,6 +75,12 @@ evaluate() {
 
   if [[ -z "$ephor_url" ]]; then
     fail_closed unavailable "EPHOR_URL is not configured"
+    return 1
+  fi
+  # A governance connector must only ever reach an http(s) endpoint. Refuse
+  # anything else fail-closed rather than handing a non-http URL to curl.
+  if [[ "$ephor_url" != http://* && "$ephor_url" != https://* ]]; then
+    fail_closed unavailable "EPHOR_URL must be an http(s) URL"
     return 1
   fi
   if [[ -z "$change_set_id" ]]; then

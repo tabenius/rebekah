@@ -89,6 +89,15 @@ stop_server
 [[ "$status" -ne 0 ]]
 jq -e '.state == "failed" and .reason == "Unsupported EPHOR_API_STYLE: magic"' "$evidence" >/dev/null
 
+evidence="$fixture/non-http.json"
+set +e
+REBEKAH_CHANGE_SET_ID=cs-test REBEKAH_GOVERNANCE_EVIDENCE="$evidence" \
+  EPHOR_URL="file:///etc/passwd" bash "$connector" evaluate >/dev/null 2>&1
+status="$?"
+set -e
+[[ "$status" -ne 0 ]]
+jq -e '.state == "unavailable" and .reason == "EPHOR_URL must be an http(s) URL"' "$evidence" >/dev/null
+
 unset EPHOR_URL
 evidence="$fixture/unconfigured.json"
 set +e
