@@ -68,7 +68,20 @@ for _ in $(seq 1 90); do
       -e EPHOR_POLICY_REVISION=smoke-v0 \
       "$name" rebekah-govern |
       jq -e '.ready == true and .evidence.evidence.state == "passed"' >/dev/null
-    printf 'ok: core services and governed WeftMark evidence are healthy\n'
+    # Containment invariant: a service UID must not be able to read another
+    # service's state directory (0750, per-service group). opencode (10002)
+    # must be denied the weftmark (10004) and ollama (10001) state dirs, while
+    # weftmark can still read its own.
+    if "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/weftmark >/dev/null 2>&1 \
+      || "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/ollama >/dev/null 2>&1; then
+      printf 'failed: cross-service state directory is readable (isolation broken)\n' >&2
+      exit 1
+    fi
+    if ! "$runtime" exec --user 10004:10004 "$name" ls /var/lib/rebekah/weftmark >/dev/null 2>&1; then
+      printf 'failed: service cannot read its own state directory\n' >&2
+      exit 1
+    fi
+    printf 'ok: core services, governed WeftMark evidence, and service isolation are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then
