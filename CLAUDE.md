@@ -1,0 +1,96 @@
+# CLAUDE.md
+
+Guidance for working in this repository. Rebekah packages a reproducible,
+self-hosted OCI image (built with Nix) that supervises four services for
+governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
+**WeftMark**, plus a fail-closed **Ephor/KAGP** governance connector.
+
+## Layout
+
+- `flake.nix` — inputs and outputs (`packages.<system>.image`, `.weftmark`,
+  `.sylvae`; `checks.<system>` = a `shellcheck` derivation plus the weftmark and
+  sylvae package builds).
+- `nix/image.nix` — the `dockerTools.buildLayeredImage`: contents, `/etc/passwd`
+  and `/etc/group`, state-dir modes, entrypoint install, OCI config.
+- `nix/entrypoint.sh` — supervisor: `serve` / `doctor` / `health`. Sets up state
+  dirs, drops privileges per service, health-checks, forwards termination.
+- `nix/ephor-connector.sh` — `rebekah-ephor`: the governance connector (talks to
+  Ephor over loopback HTTP, emits normalized evidence, fails closed).
+- `nix/govern.sh` — `rebekah-govern`: attaches connector output to WeftMark as
+  `governance` evidence and requires it for a review decision.
+- `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
+- `tests/smoke.sh` — end-to-end container test (Docker).
+- `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
+
+## Build & validate
+
+Everything CI runs is reproducible locally with Nix + Docker:
+
+```bash
+nix flake check --print-build-logs      # shellcheck + weftmark/sylvae builds+tests
+nix build .#image --print-build-logs    # build the OCI image
+docker load < result
+bash tests/smoke.sh                      # full container smoke test
+bash tests/ephor-connector.sh           # connector pass/fail-closed cases
+shellcheck --severity=warning nix/*.sh tests/*.sh
+```
+
+Fetching the private `ephor-src` input (`github:tabenius/BAZ.AI-governance`)
+needs a GitHub token. Locally set `access-tokens = github.com=<token>` in
+`nix.conf`; in CI it comes from the `EPHOR_READ_TOKEN` repository secret. To
+build without it (e.g. offline), override the unused input:
+`nix build .#image --override-input ephor-src path:/tmp/placeholder`.
+
+**Always validate a change in a real container** (build the image, `docker
+load`, run `tests/smoke.sh`) before pushing — a runtime regression will not show
+up in `nix flake check` alone.
+
+## Runtime architecture
+
+The supervisor (PID-1 via `tini`) runs as root only long enough to create and
+`chown` the state dirs, then launches each service under `setpriv` with a
+distinct UID/GID and no ambient privileges. All ports are loopback-only.
+
+| Service  | UID:GID       | Port   | State dir                  | Health |
+| -------- | ------------- | ------ | -------------------------- | ------ |
+| ollama   | 10001:10001   | 11434  | `/var/lib/rebekah/ollama`   | `/api/version` |
+| opencode | 10002:10002   | 4096   | `/var/lib/rebekah/opencode` | `/global/health` |
+| sylvae   | 10003:10003   | 8971   | `/var/lib/rebekah/sylvae`   | `/` |
+| weftmark | 10004:10004   | 8765   | `/var/lib/rebekah/weftmark` | `/healthz` |
+
+WeftMark operates on the Git repo mounted at `/workspace` (requires a valid
+`HEAD`). The image ships no model weights — `ollama pull` is required before
+inference.
+
+## Security invariants — do not regress
+
+These are enforced by the runtime and, where noted, guarded by tests. Preserve
+them in any change:
+
+1. **Per-service isolation.** Each service has its own UID *and* primary group
+   (`gid == uid`); state dirs are `0750`, so no service can read another's state
+   directory. Services run with `setpriv --clear-groups --no-new-privs`. Do not
+   reintroduce a shared group or widen state-dir modes. Guarded by
+   `tests/smoke.sh` (opencode must be denied the weftmark/ollama state dirs).
+2. **Loopback only.** All services bind `127.0.0.1`. Remote access belongs behind
+   an authenticated TLS proxy, never by binding `0.0.0.0`.
+3. **Fail-closed governance connector** (`nix/ephor-connector.sh`):
+   - Only ever reaches an http(s) endpoint — non-`http(s)` `EPHOR_URL` fails
+     closed; curl runs with `--proto '=http,https'` and no `-L`.
+   - `entry_id` from the Ephor response is constrained to `^[A-Za-z0-9._-]+$`
+     before being interpolated into the finalize URL.
+   - `EPHOR_AUTH_TOKEN` is passed via a curl config on stdin, never on argv
+     (argv is readable via `/proc/<pid>/cmdline`).
+   - Any denial, hold, transport error, malformed response, invalid chain hash,
+     or missing config exits non-zero with non-passed evidence.
+4. **Evidence binds to a clean commit.** WeftMark's `evidence run` requires a
+   clean worktree; keep scratch files out of `/workspace`.
+5. **Secrets never enter the image or Nix store** — inject at runtime only.
+
+## Conventions
+
+- Shell scripts must pass `shellcheck --severity=warning` (it is a flake check).
+- Keep changes minimal and validated; prefer adding a test that guards a fixed
+  invariant (see the connector cases and the smoke isolation check).
+- Regenerate `flake.lock` with the Nix tooling (`nix flake update <input>`),
+  never by hand.

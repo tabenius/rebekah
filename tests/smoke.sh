@@ -57,8 +57,11 @@ ephor_port="$(cat "$port_file")"
 for _ in $(seq 1 90); do
   if "$runtime" exec "$name" rebekah-health >/dev/null 2>&1; then
     "$runtime" exec "$name" rebekah-health
-    "$runtime" exec "$name" rebekah-doctor |
-      grep -q 'correlation/change_set_id=smoke-change-set'
+    # Capture doctor output before grepping: piping it straight into `grep -q`
+    # lets grep close the pipe on its first match, and under `set -o pipefail`
+    # the SIGPIPE'd rebekah-doctor (exit 141) then fails the script racily.
+    doctor_out="$("$runtime" exec "$name" rebekah-doctor)"
+    grep -q 'correlation/change_set_id=smoke-change-set' <<<"$doctor_out"
     "$runtime" exec "$name" weftmark \
       --repo /workspace --ledger /var/lib/rebekah/weftmark/ledger.jsonl \
       changeset create smoke-change-set \
