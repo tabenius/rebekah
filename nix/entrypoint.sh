@@ -194,11 +194,14 @@ serve() {
     "$state_dir/sylvae/runs" \
     "$state_dir/sylvae/skills" \
     "$state_dir/weftmark"
+  # chmod before chown: while root still owns these dirs the mode change needs
+  # no CAP_FOWNER, so the container can run without it. chown -R preserves the
+  # mode.
+  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark}
   chown -R 10001:10001 "$state_dir/ollama"
   chown -R 10002:10002 "$state_dir/opencode"
   chown -R 10003:10003 "$state_dir/sylvae"
   chown -R 10004:10004 "$state_dir/weftmark"
-  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark}
   doctor
   seed_ledger
   trap stop_services TERM INT

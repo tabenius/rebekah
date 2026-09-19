@@ -44,10 +44,20 @@ ephor_port="$(cat "$port_file")"
 
 "$runtime" run --rm -v "$fixture:/workspace" "$image" doctor
 
+# Least-privilege run: the supervisor needs only CHOWN (set up state dirs),
+# SETUID/SETGID (launch each service as its own uid), KILL (forward termination
+# to the cross-uid children), and DAC_OVERRIDE (so a root `docker exec` of
+# rebekah-govern can write the weftmark-owned ledger). Everything else Docker
+# grants root by default is dropped, with no-new-privileges. Running the smoke
+# test this way guards the minimal set against regressions.
 "$runtime" run -d \
   --name "$name" \
   --add-host host.docker.internal:host-gateway \
   --read-only \
+  --cap-drop=ALL \
+  --cap-add=CHOWN --cap-add=DAC_OVERRIDE \
+  --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
+  --security-opt=no-new-privileges \
   --tmpfs /run/rebekah:rw,noexec,nosuid,size=16m \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   -v "$fixture:/workspace" \

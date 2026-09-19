@@ -132,6 +132,10 @@ docker volume create rebekah-state
 
 docker run --rm \
   --read-only \
+  --cap-drop=ALL \
+  --cap-add=CHOWN --cap-add=DAC_OVERRIDE \
+  --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
+  --security-opt=no-new-privileges \
   --tmpfs /run/rebekah:rw,noexec,nosuid,size=16m \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --mount type=volume,src=rebekah-state,dst=/var/lib/rebekah \
@@ -143,6 +147,14 @@ docker run --rm \
 The entrypoint initializes volume ownership for the four isolated service UIDs.
 The mounted workspace is the only Git safe-directory exception configured by
 the runtime.
+
+Run with least privilege. The supervisor needs only five Linux capabilities —
+`CHOWN` (set up state directories), `SETUID`/`SETGID` (launch each service as
+its own uid), `KILL` (forward termination to the cross-uid children), and
+`DAC_OVERRIDE` (so a root `docker exec` of `rebekah-govern` can write the
+weftmark-owned ledger) — so the example drops everything else Docker grants root
+by default and adds `no-new-privileges`. The container's smoke test runs under
+exactly this set.
 
 The image ships **no model weights** — Ollama starts with an empty model store.
 Pull a model into the persistent state volume before requesting inference; it is
