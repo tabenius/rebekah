@@ -110,6 +110,15 @@ nix build .#image
 docker load < result
 ```
 
+### Published image
+
+CI publishes the OCI image to **`ghcr.io/tabenius/rebekah`** (`.github/workflows/publish-image.yml`):
+`:latest` on `main`, `:<tag>` on `v*` tags, plus a `sha-<short>` tag. Tagged
+builds also attach the image tarball (`rebekah-image.tar.gz`) as a release asset
+for offline/air-gapped installs. This is what
+[v-BAZ](https://github.com/tabenius/v-BAZ) pulls to run Rebekah as its default AI
+orchestration/governance platform (registry pull, ESP-staged tarball fallback).
+
 The flake lock pins nixpkgs, WeftMark, Sylvae, and the BAZ.AI-governance
 (Ephor/KAGP) source for reproducible evaluation. If `ephor-src` is not yet in
 your local `flake.lock`, run `nix flake lock` (or `nix flake update ephor-src`)
