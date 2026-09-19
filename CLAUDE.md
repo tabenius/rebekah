@@ -74,7 +74,15 @@ them in any change:
    `tests/smoke.sh` (opencode must be denied the weftmark/ollama state dirs).
 2. **Loopback only.** All services bind `127.0.0.1`. Remote access belongs behind
    an authenticated TLS proxy, never by binding `0.0.0.0`.
-3. **Fail-closed governance connector** (`nix/ephor-connector.sh`):
+3. **OpenCode HTTP is authenticated.** OpenCode's server is not left open on
+   loopback (any co-tenant service could otherwise drive it). The supervisor
+   sets `OPENCODE_SERVER_PASSWORD` — operator-provided, or a per-boot random one
+   — and persists it root-only at `$run_dir/opencode-password` (`0600`), so the
+   health check and an operator can read it but the service UIDs cannot.
+   OpenCode then requires HTTP Basic auth (user `opencode`) on every endpoint,
+   and the health check authenticates. Do not remove the password or widen the
+   file's mode.
+4. **Fail-closed governance connector** (`nix/ephor-connector.sh`):
    - Only ever reaches an http(s) endpoint — non-`http(s)` `EPHOR_URL` fails
      closed; curl runs with `--proto '=http,https'` and no `-L`.
    - `entry_id` from the Ephor response is constrained to `^[A-Za-z0-9._-]+$`
@@ -83,9 +91,9 @@ them in any change:
      (argv is readable via `/proc/<pid>/cmdline`).
    - Any denial, hold, transport error, malformed response, invalid chain hash,
      or missing config exits non-zero with non-passed evidence.
-4. **Evidence binds to a clean commit.** WeftMark's `evidence run` requires a
+5. **Evidence binds to a clean commit.** WeftMark's `evidence run` requires a
    clean worktree; keep scratch files out of `/workspace`.
-5. **Secrets never enter the image or Nix store** — inject at runtime only.
+6. **Secrets never enter the image or Nix store** — inject at runtime only.
 
 ## Conventions
 
