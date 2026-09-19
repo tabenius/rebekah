@@ -70,6 +70,13 @@ All ports are internal and loopback-only. Remote access belongs behind an
 authenticated TLS proxy or secure tunnel. Secrets must be injected at runtime;
 they must not enter the image or Nix store.
 
+The OpenCode server is not left open on loopback. The supervisor sets
+`OPENCODE_SERVER_PASSWORD` — the value you provide, or a per-boot random one —
+and writes it root-only to `/run/rebekah/opencode-password`; OpenCode then
+requires HTTP Basic auth (user `opencode`) on every endpoint. Set the variable
+explicitly if you need a stable password for a client, or read the generated
+one from that file inside the container.
+
 WeftMark operates on the Git repository mounted at `/workspace` and requires a
 valid `HEAD`. Persistent service data lives under `/var/lib/rebekah`.
 

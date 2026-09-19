@@ -4,6 +4,7 @@ set -euo pipefail
 state_dir="${REBEKAH_STATE_DIR:-/var/lib/rebekah}"
 run_dir="${REBEKAH_RUN_DIR:-/run/rebekah}"
 workspace="${REBEKAH_WORKSPACE:-/workspace}"
+opencode_password_file="$run_dir/opencode-password"
 
 ollama_host="${OLLAMA_HOST:-127.0.0.1:11434}"
 opencode_host="${OPENCODE_HOST:-127.0.0.1}"
@@ -78,9 +79,22 @@ doctor() {
   return "$failed"
 }
 
+# Resolve the OpenCode server password: an operator-provided value, otherwise
+# the per-boot random one written by serve(). Once a password is set OpenCode
+# requires HTTP Basic auth (user "opencode") on every endpoint, including
+# /global/health, so the health check must authenticate.
+opencode_password() {
+  if [[ -n "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
+    printf '%s' "$OPENCODE_SERVER_PASSWORD"
+  elif [[ -r "$opencode_password_file" ]]; then
+    cat "$opencode_password_file"
+  fi
+}
+
 check_url() {
   local name="$1" url="$2"
-  if curl --fail --silent --show-error --max-time 2 "$url" >/dev/null; then
+  shift 2
+  if curl --fail --silent --show-error --max-time 2 "$@" "$url" >/dev/null; then
     printf 'ok      service/%s\n' "$name"
   else
     printf 'failed  service/%s url=%s\n' "$name" "$url" >&2
@@ -91,7 +105,14 @@ check_url() {
 health() {
   local failed=0
   check_url ollama "http://$ollama_host/api/version" || failed=1
-  check_url opencode "http://$opencode_host:$opencode_port/global/health" || failed=1
+  local oc_pw
+  oc_pw="$(opencode_password)"
+  local -a oc_auth=()
+  if [[ -n "$oc_pw" ]]; then
+    oc_auth=(--user "opencode:$oc_pw")
+  fi
+  check_url opencode "http://$opencode_host:$opencode_port/global/health" \
+    "${oc_auth[@]}" || failed=1
   check_url sylvae "http://$sylvae_host:$sylvae_port/" || failed=1
   check_url weftmark "http://$weftmark_host:$weftmark_port/healthz" || failed=1
   return "$failed"
@@ -181,6 +202,17 @@ serve() {
   doctor
   seed_ledger
   trap stop_services TERM INT
+
+  # Secure the OpenCode HTTP surface. Unauthenticated, any co-tenant service
+  # (or anything else reaching container loopback) can drive OpenCode, which has
+  # workspace access and runs agents. Use the operator-provided password or mint
+  # a per-boot random one, and persist it root-only (0600) so the health check
+  # and an operator can read it while the service UIDs cannot.
+  if [[ -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
+    OPENCODE_SERVER_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
+  fi
+  export OPENCODE_SERVER_PASSWORD
+  ( umask 077; printf '%s' "$OPENCODE_SERVER_PASSWORD" >"$opencode_password_file" )
 
   OLLAMA_MODELS="$state_dir/ollama/models" \
     run_as 10001 "$state_dir/ollama" ollama serve
