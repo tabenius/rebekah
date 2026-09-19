@@ -1,0 +1,75 @@
+name: publish-image
+
+# Publish the Rebekah OCI image to GHCR so downstreams (e.g. v-BAZ, which runs
+# it as the default AI platform) can pull it, and attach the image tarball to a
+# release for offline / air-gapped installs.
+#
+# Triggers:
+#   - push to main            -> ghcr.io/<owner>/rebekah:latest  (+ :sha-<short>)
+#   - push of a tag v*        -> ghcr.io/<owner>/rebekah:<tag>    (+ release asset)
+#   - manual (workflow_dispatch)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # attach the tarball to a release on tag builds
+  packages: write   # push the image to GHCR
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          # See ci.yml: EPHOR_READ_TOKEN reaches the private ephor-src input;
+          # falls back to GITHUB_TOKEN (public inputs only) when unset.
+          github_access_token: ${{ secrets.EPHOR_READ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: nix build .#image --print-build-logs
+        # result is a gzipped docker-archive tarball (dockerTools.buildLayeredImage)
+
+      - name: Compute image ref (lowercased owner)
+        id: ref
+        run: |
+          repo_lc=$(printf '%s' "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${repo_lc}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "primary=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "primary=latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - name: Push to GHCR
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          PRIMARY: ${{ steps.ref.outputs.primary }}
+          SHA_TAG: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -eu
+          skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          # result is docker-archive:<gzip tar>; skopeo reads it directly.
+          skopeo copy "docker-archive:$(readlink -f result)" "docker://${IMAGE}:${PRIMARY}"
+          skopeo copy "docker://${IMAGE}:${PRIMARY}" "docker://${IMAGE}:${SHA_TAG}"
+
+      - name: Stage tarball for release
+        if: github.ref_type == 'tag'
+        run: |
+          cp -L result rebekah-image.tar.gz
+
+      - name: Attach tarball to release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: rebekah-image.tar.gz
