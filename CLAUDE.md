@@ -94,6 +94,14 @@ them in any change:
 5. **Evidence binds to a clean commit.** WeftMark's `evidence run` requires a
    clean worktree; keep scratch files out of `/workspace`.
 6. **Secrets never enter the image or Nix store** — inject at runtime only.
+7. **Least-privilege run.** The supervisor needs only five Linux capabilities:
+   `CHOWN` (set up state dirs), `SETUID`/`SETGID` (launch each service as its own
+   uid), `KILL` (forward termination to the cross-uid children), and
+   `DAC_OVERRIDE` (a root `docker exec` of `rebekah-govern` writes the
+   weftmark-owned ledger). The README run example and `tests/smoke.sh` run with
+   `--cap-drop=ALL` plus exactly those five and `--security-opt=no-new-privileges`;
+   keep `serve()`'s `chmod` before its `chown` so no `CAP_FOWNER` is needed, and
+   don't add capabilities without updating both.
 
 ## Conventions
 
