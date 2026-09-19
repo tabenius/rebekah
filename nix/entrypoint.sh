@@ -5,6 +5,7 @@ state_dir="${REBEKAH_STATE_DIR:-/var/lib/rebekah}"
 run_dir="${REBEKAH_RUN_DIR:-/run/rebekah}"
 workspace="${REBEKAH_WORKSPACE:-/workspace}"
 opencode_password_file="$run_dir/opencode-password"
+gateway_token_file="$run_dir/gateway-token"
 
 ollama_host="${OLLAMA_HOST:-127.0.0.1:11434}"
 opencode_host="${OPENCODE_HOST:-127.0.0.1}"
@@ -13,6 +14,12 @@ sylvae_host="${SYLVAE_HOST:-127.0.0.1}"
 sylvae_port="${SYLVAE_PORT:-8971}"
 weftmark_host="${WEFTMARK_HOST:-127.0.0.1}"
 weftmark_port="${WEFTMARK_PORT:-8765}"
+
+# The gateway is the single authenticated entry point for Rebekah's API
+# (invariant #2's "authenticated TLS proxy"). It binds loopback by default;
+# operators expose it on the LAN by setting REBEKAH_GATEWAY_HOST + TLS.
+gateway_enable="${REBEKAH_GATEWAY_ENABLE:-1}"
+gateway_port="${REBEKAH_GATEWAY_PORT:-8080}"
 
 # Treat the explicitly mounted workspace as trusted across service UIDs.
 export GIT_CONFIG_COUNT=1
@@ -54,6 +61,13 @@ doctor() {
     failed=1
   fi
 
+  if command -v rebekah-gateway >/dev/null 2>&1; then
+    printf 'ok      binary/rebekah-gateway\n'
+  else
+    printf 'failed  binary/rebekah-gateway missing\n' >&2
+    failed=1
+  fi
+
   if git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
     printf 'ok      workspace/git-head\n'
   else
@@ -91,6 +105,17 @@ opencode_password() {
   fi
 }
 
+# Resolve the gateway's internal (token) API credential: an operator-provided
+# value, otherwise the per-boot random one written by serve(). An operator reads
+# it from the root-only file to hand to a LAN client / GUI / HITL guest.
+gateway_token() {
+  if [[ -n "${REBEKAH_GATEWAY_TOKEN:-}" ]]; then
+    printf '%s' "$REBEKAH_GATEWAY_TOKEN"
+  elif [[ -r "$gateway_token_file" ]]; then
+    cat "$gateway_token_file"
+  fi
+}
+
 check_url() {
   local name="$1" url="$2"
   shift 2
@@ -115,6 +140,19 @@ health() {
     "${oc_auth[@]}" || failed=1
   check_url sylvae "http://$sylvae_host:$sylvae_port/" || failed=1
   check_url weftmark "http://$weftmark_host:$weftmark_port/healthz" || failed=1
+  if [[ "$gateway_enable" != 0 ]]; then
+    # The gateway always listens on loopback too; check it there. When TLS is
+    # configured the listener speaks HTTPS, so probe https and skip cert
+    # verification (a LAN cert won't match 127.0.0.1) for this liveness check.
+    local gw_scheme=http
+    local -a gw_opts=()
+    if [[ -n "${REBEKAH_GATEWAY_TLS_CERT:-}" ]]; then
+      gw_scheme=https
+      gw_opts=(--insecure)
+    fi
+    check_url gateway "$gw_scheme://127.0.0.1:$gateway_port/healthz" \
+      "${gw_opts[@]}" || failed=1
+  fi
   return "$failed"
 }
 
@@ -237,6 +275,21 @@ serve() {
       --repo "$workspace" \
       --ledger "$state_dir/weftmark/ledger.jsonl" \
       --host "$weftmark_host" --port "$weftmark_port"
+
+  # The authenticated API gateway. It fronts the loopback backends with a single
+  # authenticated entry (token and/or OIDC) and is the only service meant to face
+  # the LAN / a GUI / a HITL guest. If no token is supplied, mint a per-boot one
+  # and persist it root-only (0600) so an operator can read it while the gateway
+  # UID (10005) and the other service UIDs cannot. The token is passed to the
+  # gateway via its environment, never on argv.
+  if [[ "$gateway_enable" != 0 ]]; then
+    if [[ -z "${REBEKAH_GATEWAY_TOKEN:-}" ]]; then
+      REBEKAH_GATEWAY_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
+    fi
+    export REBEKAH_GATEWAY_TOKEN
+    ( umask 077; printf '%s' "$REBEKAH_GATEWAY_TOKEN" >"$gateway_token_file" )
+    run_as 10005 "$run_dir" rebekah-gateway
+  fi
 
   if ! wait_until_healthy; then
     printf 'rebekah: services failed to become healthy\n' >&2
