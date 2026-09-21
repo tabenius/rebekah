@@ -34,11 +34,15 @@ from __future__ import annotations
 import base64
 import hmac
 import http.client
+import json
+import mimetypes
 import os
 import ssl
 import sys
 import threading
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote, urlsplit
 
 # --- configuration (runtime env only; no secrets baked into the image) -------
 
@@ -66,6 +70,7 @@ class Config:
         self.tls_key = env.get("REBEKAH_GATEWAY_TLS_KEY", "").strip()
         self.max_body = int(env.get("REBEKAH_GATEWAY_MAX_BODY", str(32 * 1024 * 1024)))
         self.timeout = float(env.get("REBEKAH_GATEWAY_TIMEOUT", "120"))
+        self.console_root = env.get("REBEKAH_CONSOLE_ROOT", "").strip()
 
         # Internal (token) scheme.
         self.token = env.get("REBEKAH_GATEWAY_TOKEN", "")
@@ -247,19 +252,120 @@ def make_handler(cfg, auth):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _principal(self):
+            principal = auth.principal(self.headers.get("Authorization"))
+            if principal is not None:
+                return principal
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except Exception:
+                return None
+            session = cookie.get("rebekah_session")
+            return None if session is None else auth.principal("Bearer " + session.value)
+
+        def _login(self):
+            body = (
+                "<!doctype html><html><head><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<title>Rebekah console</title><style>"
+                "body{font:16px system-ui;max-width:32rem;margin:12vh auto;padding:2rem;"
+                "background:#111827;color:#f9fafb}input,button{font:inherit;padding:.7rem;"
+                "width:100%;box-sizing:border-box;margin:.4rem 0}button{cursor:pointer}"
+                "small{color:#9ca3af}</style></head><body><h1>Rebekah console</h1>"
+                "<p>Enter a gateway token or OIDC access token.</p>"
+                "<div id=n role=status></div><form id=f><input id=t type=password "
+                "autocomplete=current-password aria-label='Access token' required>"
+                "<button>Sign in</button></form><small>The credential is exchanged for "
+                "an HttpOnly, same-site session cookie and is not stored by this page.</small>"
+                "<script>f.onsubmit=async e=>{e.preventDefault();let r=await fetch('/session',"
+                "{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify"
+                "({token:t.value})});if(r.ok)location='/';else n.textContent='Sign-in failed.'}"
+                "</script></body></html>"
+            ).encode()
+            self._write_head(200, [
+                ("Content-Type", "text/html; charset=utf-8"),
+                ("Cache-Control", "no-store"),
+                ("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; "
+                 "style-src 'unsafe-inline'; frame-ancestors 'none'"),
+            ], len(body))
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _session(self):
+            if self.command != "POST":
+                self._fail(405, "method not allowed", [("Allow", "POST")])
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length < 1 or length > 16384:
+                self._fail(400, "invalid session request")
+                return
+            try:
+                token = json.loads(self.rfile.read(length)).get("token", "")
+            except (ValueError, AttributeError):
+                token = ""
+            if auth.principal("Bearer " + token) is None:
+                self._fail(401, "unauthorized")
+                return
+            flags = "; Path=/; HttpOnly; SameSite=Strict"
+            if cfg.tls_enabled:
+                flags += "; Secure"
+            self._write_head(204, [("Set-Cookie", "rebekah_session=" + token + flags)], 0)
+
+        def _console_path(self):
+            if not cfg.console_root or self.command not in ("GET", "HEAD"):
+                return None
+            path = unquote(urlsplit(self.path).path)
+            relative = "index.html" if path == "/" else path.lstrip("/")
+            candidate = os.path.realpath(os.path.join(cfg.console_root, relative))
+            root = os.path.realpath(cfg.console_root)
+            if os.path.commonpath((root, candidate)) != root or not os.path.isfile(candidate):
+                return None
+            return candidate
+
+        def _serve_console(self, path):
+            with open(path, "rb") as handle:
+                body = handle.read()
+            content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            self._write_head(200, [
+                ("Content-Type", content_type),
+                ("Cache-Control", "no-store" if path.endswith("index.html")
+                 else "public, max-age=3600"),
+                ("Content-Security-Policy", "default-src 'self'; connect-src 'self'; "
+                 "img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                 "frame-ancestors 'none'"),
+            ], len(body))
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
         def _handle(self):
             if self.path in ("/healthz", "/healthz/"):
                 # Unauthenticated liveness only -- reveals nothing.
                 self._fail(200, "ok")
                 return
 
+            if urlsplit(self.path).path == "/session":
+                self._session()
+                return
+
+            console_path = self._console_path()
+            principal = self._principal()
+            if console_path is not None:
+                if principal is None:
+                    self._login()
+                else:
+                    self._serve_console(console_path)
+                return
+
             first = self.path.lstrip("/").split("/", 1)[0].split("?", 1)[0]
-            backend = cfg.backends.get(first)
+            # WeftMark's bundled review client calls its native /v0 API. Keep
+            # that contract while retaining /weftmark/... for scripts.
+            native_weftmark = first == "v0"
+            backend = cfg.backends.get("weftmark" if native_weftmark else first)
             if backend is None:
                 self._fail(404, "not found")
                 return
 
-            principal = auth.principal(self.headers.get("Authorization"))
             if principal is None:
                 self._fail(
                     401, "unauthorized",
@@ -275,7 +381,7 @@ def make_handler(cfg, auth):
 
             host, port, upstream_auth = backend
             # Strip the "/<backend>" prefix; forward the remainder (with query).
-            prefix = "/" + first
+            prefix = "" if native_weftmark else "/" + first
             upstream_path = self.path[len(prefix):] or "/"
             if not upstream_path.startswith("/"):
                 upstream_path = "/" + upstream_path
