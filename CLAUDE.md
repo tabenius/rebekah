@@ -18,9 +18,13 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   Ephor over loopback HTTP, emits normalized evidence, fails closed).
 - `nix/govern.sh` — `rebekah-govern`: attaches connector output to WeftMark as
   `governance` evidence and requires it for a review decision.
+- `nix/gateway.py` — `rebekah-gateway`: the single authenticated entry point for
+  Rebekah's API (token and/or OIDC auth), fronting the loopback backends.
 - `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
+- `tests/gateway.sh` + `tests/gateway-oidc.py` — gateway auth/proxy unit test
+  (token + fail-closed guards on stdlib; OIDC when PyJWT is present).
 
 ## Build & validate
 
@@ -57,6 +61,14 @@ distinct UID/GID and no ambient privileges. All ports are loopback-only.
 | opencode | 10002:10002   | 4096   | `/var/lib/rebekah/opencode` | `/global/health` |
 | sylvae   | 10003:10003   | 8971   | `/var/lib/rebekah/sylvae`   | `/` |
 | weftmark | 10004:10004   | 8765   | `/var/lib/rebekah/weftmark` | `/healthz` |
+| gateway  | 10005:10005   | 8080   | (none)                      | `/healthz` |
+
+The four core services bind loopback only. The **gateway** is the exception by
+design: it is the one process meant to face the LAN / a GUI / a HITL guest, and
+it authenticates every request before forwarding an allow-listed route to a
+loopback backend. It still binds loopback by *default*; operators expose it with
+`REBEKAH_GATEWAY_HOST` + TLS. It needs no state directory and no extra Linux
+capability (it binds a port ≥1024).
 
 WeftMark operates on the Git repo mounted at `/workspace` (requires a valid
 `HEAD`). The image ships no model weights — `ollama pull` is required before
@@ -94,7 +106,24 @@ them in any change:
 5. **Evidence binds to a clean commit.** WeftMark's `evidence run` requires a
    clean worktree; keep scratch files out of `/workspace`.
 6. **Secrets never enter the image or Nix store** — inject at runtime only.
-7. **Least-privilege run.** The supervisor needs only five Linux capabilities:
+7. **Authenticated, fail-closed API gateway** (`nix/gateway.py`,
+   `rebekah-gateway`, UID 10005): the only process allowed to face the network.
+   - Two auth schemes, either sufficient: a static bearer **token** (internal /
+     LAN / CI; constant-time compared) and **OIDC** JWT bearer verified against
+     the issuer's JWKS (external / SSO / HITL). PyJWT is imported lazily so the
+     token path is stdlib-only.
+   - Fails closed: refuses to start when bound beyond loopback without TLS, when
+     no auth scheme is configured (never an open proxy), or with no exposed
+     backend; an unexposed/unknown route is `404`, an unauthenticated request is
+     `401`, an upstream error is `502` — backend details are never leaked.
+   - Only allow-listed backends are reachable (`REBEKAH_GATEWAY_EXPOSE`, default
+     `weftmark`); the gateway re-authenticates to OpenCode itself and never
+     forwards the client's `Authorization` to a backend.
+   - The per-boot token is persisted root-only (`0600`,
+     `/run/rebekah/gateway-token`) and passed to the gateway via env, never
+     argv. Guarded by `tests/gateway.sh` and `tests/smoke.sh`. No extra
+     capability is required; do not add one.
+8. **Least-privilege run.** The supervisor needs only five Linux capabilities:
    `CHOWN` (set up state dirs), `SETUID`/`SETGID` (launch each service as its own
    uid), `KILL` (forward termination to the cross-uid children), and
    `DAC_OVERRIDE` (a root `docker exec` of `rebekah-govern` writes the

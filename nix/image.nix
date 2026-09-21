@@ -1,6 +1,12 @@
 { dockerTools, bash, coreutils, curl, findutils, git, gnugrep, jq, ollama
-, opencode, procps, tini, util-linux, weftmark, sylvae }:
+, opencode, procps, python3, tini, util-linux, weftmark, sylvae }:
 
+let
+  # The gateway runs on its own Python with PyJWT + cryptography for OIDC JWT
+  # verification. The token path needs only the stdlib (PyJWT is imported lazily
+  # in gateway.py), but bundling both keeps the external (OIDC) path available.
+  gatewayPython = python3.withPackages (ps: [ ps.pyjwt ps.cryptography ]);
+in
 dockerTools.buildLayeredImage {
   name = "rebekah";
   tag = "latest";
@@ -14,6 +20,7 @@ dockerTools.buildLayeredImage {
     mkdir -p \
       etc/rebekah \
       usr/local/bin \
+      usr/local/lib/rebekah \
       run/rebekah \
       var/lib/rebekah/ollama \
       var/lib/rebekah/opencode \
@@ -33,6 +40,7 @@ dockerTools.buildLayeredImage {
       'opencode:x:10002:10002:OpenCode service:/var/lib/rebekah/opencode:/sbin/nologin' \
       'sylvae:x:10003:10003:Sylvae service:/var/lib/rebekah/sylvae:/sbin/nologin' \
       'weftmark:x:10004:10004:WeftMark service:/var/lib/rebekah/weftmark:/sbin/nologin' \
+      'gateway:x:10005:10005:Rebekah API gateway:/var/lib/rebekah:/sbin/nologin' \
       > etc/passwd
     printf '%s\n' \
       'root:x:0:' \
@@ -41,6 +49,7 @@ dockerTools.buildLayeredImage {
       'opencode:x:10002:' \
       'sylvae:x:10003:' \
       'weftmark:x:10004:' \
+      'gateway:x:10005:' \
       > etc/group
 
     chmod 0750 var/lib/rebekah/*
@@ -50,6 +59,15 @@ dockerTools.buildLayeredImage {
     install -m 0555 ${./govern.sh} usr/local/bin/rebekah-govern
     ln -s rebekah-entrypoint usr/local/bin/rebekah-doctor
     ln -s rebekah-entrypoint usr/local/bin/rebekah-health
+
+    # The authenticated API gateway and its launcher (pins the gateway Python
+    # that carries PyJWT + cryptography).
+    install -m 0555 ${./gateway.py} usr/local/lib/rebekah/gateway.py
+    printf '%s\n' \
+      '#!${bash}/bin/bash' \
+      'exec ${gatewayPython}/bin/python3 /usr/local/lib/rebekah/gateway.py "$@"' \
+      > usr/local/bin/rebekah-gateway
+    chmod 0555 usr/local/bin/rebekah-gateway
   '';
 
   config = {
@@ -71,7 +89,14 @@ dockerTools.buildLayeredImage {
       "SYLVAE_PORT=8971"
       "WEFTMARK_HOST=127.0.0.1"
       "WEFTMARK_PORT=8765"
+      # API gateway: loopback by default; set REBEKAH_GATEWAY_HOST + TLS to
+      # expose it on the LAN. Exposes only WeftMark until told otherwise.
+      "REBEKAH_GATEWAY_ENABLE=1"
+      "REBEKAH_GATEWAY_HOST=127.0.0.1"
+      "REBEKAH_GATEWAY_PORT=8080"
+      "REBEKAH_GATEWAY_EXPOSE=weftmark"
     ];
+    ExposedPorts = { "8080/tcp" = { }; };
     WorkingDir = "/workspace";
     Volumes = { "/var/lib/rebekah" = { }; "/workspace" = { }; };
     Healthcheck = {

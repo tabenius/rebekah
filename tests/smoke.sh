@@ -94,7 +94,43 @@ for _ in $(seq 1 90); do
       printf 'failed: service cannot read its own state directory\n' >&2
       exit 1
     fi
-    printf 'ok: core services, governed WeftMark evidence, and service isolation are healthy\n'
+
+    # API gateway: the authenticated entry point. The per-boot token lives in a
+    # root-only (0600) file; the gateway UID (10005) and other service UIDs must
+    # not be able to read it. An unauthenticated request is refused; an
+    # authenticated one is proxied to the real WeftMark backend.
+    if "$runtime" exec --user 10005:10005 "$name" cat /run/rebekah/gateway-token >/dev/null 2>&1 \
+      || "$runtime" exec --user 10002:10002 "$name" cat /run/rebekah/gateway-token >/dev/null 2>&1; then
+      printf 'failed: gateway token file is readable by a service UID\n' >&2
+      exit 1
+    fi
+    gw_token="$("$runtime" exec "$name" cat /run/rebekah/gateway-token)"
+    gw_unauth="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+      http://127.0.0.1:8080/weftmark/healthz)"
+    if [[ "$gw_unauth" != 401 ]]; then
+      printf 'failed: gateway allowed an unauthenticated request (got %s)\n' "$gw_unauth" >&2
+      exit 1
+    fi
+    gw_auth="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+      -H "Authorization: Bearer $gw_token" \
+      http://127.0.0.1:8080/weftmark/healthz)"
+    if [[ "$gw_auth" != 200 ]]; then
+      printf 'failed: gateway did not proxy an authenticated request (got %s)\n' "$gw_auth" >&2
+      exit 1
+    fi
+    # An unexposed backend is 404 even with a valid token (opencode is opt-in).
+    gw_hidden="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+      -H "Authorization: Bearer $gw_token" \
+      http://127.0.0.1:8080/opencode/global/health)"
+    if [[ "$gw_hidden" != 404 ]]; then
+      printf 'failed: gateway exposed an opt-in backend (got %s)\n' "$gw_hidden" >&2
+      exit 1
+    fi
+
+    printf 'ok: core services, governed WeftMark evidence, service isolation, and authenticated gateway are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then

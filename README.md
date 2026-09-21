@@ -55,20 +55,27 @@ endpoints, forwards termination, and fails when any required service exits.
 
 ```mermaid
 flowchart TB
+    Client["LAN client / GUI / HITL guest"]
+    G["rebekah-gateway :8080<br/>token + OIDC auth"]
     R["Rebekah supervisor"]
     O["Ollama :11434"]
     C["OpenCode :4096"]
     S["Sylvae :8971"]
     W["WeftMark :8765"]
+    Client -->|"Bearer token / OIDC JWT"| G
     R --> O
     R --> C
     R --> S
     R --> W
+    R --> G
+    G -.->|allow-listed routes| W
 ```
 
-All ports are internal and loopback-only. Remote access belongs behind an
-authenticated TLS proxy or secure tunnel. Secrets must be injected at runtime;
-they must not enter the image or Nix store.
+The four core services bind **loopback only**. Reaching them from outside the
+container goes through the **[API gateway](#api-gateway)** — the one process that
+authenticates every request and forwards only allow-listed routes to a loopback
+backend. Secrets must be injected at runtime; they must not enter the image or
+Nix store.
 
 The OpenCode server is not left open on loopback. The supervisor sets
 `OPENCODE_SERVER_PASSWORD` — the value you provide, or a per-boot random one —
@@ -79,6 +86,67 @@ one from that file inside the container.
 
 WeftMark operates on the Git repository mounted at `/workspace` and requires a
 valid `HEAD`. Persistent service data lives under `/var/lib/rebekah`.
+
+## API gateway
+
+To use Rebekah from the local network, a GUI, or a human-in-the-loop guest, the
+supervisor runs **`rebekah-gateway`** (UID `10005`, port `8080`) — the single
+authenticated entry point that fronts the loopback services. It offers the two
+schemes flagship agent/kanban orchestrators use, and a request is accepted if
+**either** enabled scheme authenticates it:
+
+| Scheme | Typical use | Credential | Enable with |
+| --- | --- | --- | --- |
+| **token** | internal / LAN / CI / service-to-service | `Authorization: Bearer <token>` (constant-time compared) | `REBEKAH_GATEWAY_TOKEN` (or a per-boot one is minted) |
+| **oidc** | external / SSO / human GUI guest | `Authorization: Bearer <JWT>` verified against the issuer's JWKS | `REBEKAH_OIDC_ISSUER` + `REBEKAH_OIDC_AUDIENCE` |
+
+It **fails closed**: it refuses to start if bound beyond loopback without TLS, if
+no auth scheme is configured (never an open proxy), or with no exposed backend;
+an unexposed/unknown route returns `404`, an unauthenticated request `401`, and
+an upstream error `502` — backend details are never leaked. PyJWT is imported
+lazily, so the token path (and the whole off-grid story) works on the Python
+standard library alone.
+
+Only **allow-listed** backends are reachable. `REBEKAH_GATEWAY_EXPOSE` defaults
+to `weftmark` (the coordination / evidence / review board — the "kanban"
+surface); add `opencode`, `sylvae`, or `ollama` to expose more. Each is reached
+under its own prefix (`/weftmark/…`, `/opencode/…`); the gateway strips the
+prefix and re-authenticates to OpenCode itself, so a client never handles the
+OpenCode password.
+
+```bash
+# Loopback by default. Read the minted token (root-only) and call WeftMark:
+tok=$(docker exec <container> cat /run/rebekah/gateway-token)
+docker exec <container> curl -s -H "Authorization: Bearer $tok" \
+  http://127.0.0.1:8080/weftmark/healthz
+```
+
+Expose it on the LAN **only with TLS** (plaintext tokens must never cross the
+network). Provide a certificate and, optionally, expose more backends:
+
+```bash
+docker run ... -p 8443:8443 \
+  -e REBEKAH_GATEWAY_HOST=0.0.0.0 \
+  -e REBEKAH_GATEWAY_PORT=8443 \
+  -e REBEKAH_GATEWAY_TLS_CERT=/var/lib/rebekah/tls/cert.pem \
+  -e REBEKAH_GATEWAY_TLS_KEY=/var/lib/rebekah/tls/key.pem \
+  -e REBEKAH_GATEWAY_TOKEN="$MY_TOKEN" \
+  -e REBEKAH_GATEWAY_EXPOSE="weftmark opencode" \
+  rebekah:latest
+```
+
+For SSO / HITL guests, point it at your identity provider instead of (or
+alongside) the token:
+
+```bash
+  -e REBEKAH_OIDC_ISSUER=https://idp.example.org/ \
+  -e REBEKAH_OIDC_AUDIENCE=rebekah \
+  # optional: -e REBEKAH_OIDC_REQUIRED_SCOPE=rebekah.use \
+  #           -e REBEKAH_OIDC_ALLOWED_SUBJECTS="alice@example.org bob@example.org"
+```
+
+Set `REBEKAH_GATEWAY_ENABLE=0` to run without the gateway (loopback services
+only).
 
 ## Correlation spine
 
@@ -219,13 +287,16 @@ four services.
   OCI metadata.
 - `nix/entrypoint.sh` implements supervision, diagnostics, health checks, and
   shutdown.
+- `nix/gateway.py` is the authenticated API gateway (`rebekah-gateway`).
 - `nix/packages/` packages WeftMark and Sylvae from their pinned sources.
 - `tests/smoke.sh` verifies the loaded image through Docker.
+- `tests/gateway.sh` (+ `tests/gateway-oidc.py`) unit-tests the gateway's auth,
+  routing, and fail-closed guards.
 - `docs/bootstrap-contract.md` defines integration semantics and acceptance
   criteria.
 - `docs/ephor-governance-worker.md` references the merged Ephor governance
   Worker (endpoints, bindings, audit chain) the connector calls into.
-- `.github/workflows/ci.yml` checks the connector, builds and loads the image, and runs the service smoke test.
+- `.github/workflows/ci.yml` checks the connector and gateway auth, builds and loads the image, and runs the service smoke test.
 
 ## Current status
 
