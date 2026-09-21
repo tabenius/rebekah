@@ -148,6 +148,25 @@ alongside) the token:
 Set `REBEKAH_GATEWAY_ENABLE=0` to run without the gateway (loopback services
 only).
 
+### Built-in web console
+
+Open the gateway root URL in a browser (for example
+`https://rebekah.example.org:8443/`). The sign-in screen accepts either the
+configured gateway token or an OIDC access token and exchanges it for an
+HttpOnly, `SameSite=Strict` browser-session cookie (`Secure` when TLS is
+enabled). The credential is not persisted by the page.
+
+After sign-in, the gateway serves WeftMark's packaged review/kanban client. This
+is the real board projection, not a duplicate UI model: the client reads
+`/v0/kanban` from the live WeftMark service through the same authenticated
+origin. Script/API clients can continue to use `/weftmark/...` with a bearer
+header.
+
+The current console is intentionally review-first. Partition selection, model
+settings, OpenCode interaction, and write controls remain outside this first
+vertical slice; enabling those requires explicit API contracts and capability
+checks rather than browser-side guesses.
+
 ## Correlation spine
 
 A governed unit of work must remain traceable across participating services:
