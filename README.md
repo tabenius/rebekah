@@ -117,8 +117,14 @@ human-in-the-loop guest one screen over the products:
 - a **board** rendering WeftMark's live Kanban projection (`/v0/kanban`) across
   its `backlog → active → review → ready → done` lanes, with readiness, evidence
   counts and attention flags;
+- an **OpenCode** panel listing agent sessions (shown when `opencode` is exposed);
+- an **Ollama** panel listing local models and pulling new ones (shown when
+  `ollama` is exposed);
 - **service health** tiles for each exposed backend;
 - an **API console** to send an authenticated request to any exposed backend.
+
+The product panels appear only for backends that `/api/info` reports as exposed,
+so the console tracks `REBEKAH_GATEWAY_EXPOSE`.
 
 The page itself is public (it's just the app shell); every data call it makes
 goes back through the authenticated proxy, and `GET /api/info` (which tells the
