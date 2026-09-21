@@ -90,6 +90,15 @@
     max-height: 420px; }
   .empty { color: var(--muted); padding: 10px 12px; font-size: 12.5px; }
   code.k { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  .rowbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .rowbar input { min-width: 220px; }
+  .link { color: var(--accent); text-decoration: none; font-size: 12.5px; }
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .item { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .item .t { font-weight: 600; } .item .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+  .item .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .tab.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -110,6 +119,8 @@
 
   <div class="tabs" role="tablist">
     <div class="tab" id="tab-board" role="tab" aria-selected="true" tabindex="0">Board</div>
+    <div class="tab hidden" id="tab-opencode" role="tab" aria-selected="false" tabindex="0">OpenCode</div>
+    <div class="tab hidden" id="tab-ollama" role="tab" aria-selected="false" tabindex="0">Ollama</div>
     <div class="tab" id="tab-services" role="tab" aria-selected="false" tabindex="0">Services</div>
     <div class="tab" id="tab-console" role="tab" aria-selected="false" tabindex="0">API console</div>
   </div>
@@ -135,6 +146,27 @@
     </div>
     <textarea id="cBody" placeholder="Request body (JSON, optional)"></textarea>
     <pre class="out" id="cOut">—</pre>
+  </section>
+
+  <section id="panel-opencode" class="hidden">
+    <div class="rowbar">
+      <button id="ocRefresh" class="ghost">Refresh</button>
+      <span class="status" id="ocCount"></span>
+      <span class="status">Inspect the OpenAPI spec via the API console: <code class="k">GET /doc</code>.</span>
+    </div>
+    <div class="list" id="ocList"><div class="empty">Loading sessions…</div></div>
+  </section>
+
+  <section id="panel-ollama" class="hidden">
+    <div class="rowbar">
+      <input type="text" id="olName" placeholder="model to pull, e.g. gemma3:e2b" spellcheck="false">
+      <button id="olPull">Pull</button>
+      <button id="olRefresh" class="ghost">Refresh</button>
+      <span class="status" id="olStatus"></span>
+    </div>
+    <p class="status">Large models can exceed the gateway timeout — for off-grid installs prefer the
+      pre-baked artifact cache. Small models pull fine here.</p>
+    <div class="list" id="olList"><div class="empty">Loading models…</div></div>
   </section>
 </main>
 <script>
@@ -203,7 +235,17 @@
     buildBackendPicker();
     loadBoard();
     loadServices();
+    setupProductTabs();
     if (!boardTimer) boardTimer = setInterval(loadBoard, 8000);
+  }
+
+  function exposed(name) { return info && info.expose && info.expose.indexOf(name) >= 0; }
+
+  function setupProductTabs() {
+    $("tab-opencode").classList.toggle("hidden", !exposed("opencode"));
+    $("tab-ollama").classList.toggle("hidden", !exposed("ollama"));
+    if (exposed("opencode")) loadOpencode();
+    if (exposed("ollama")) loadOllama();
   }
 
   function signout() {
@@ -214,6 +256,93 @@
     setConnected(false);
     $("board").classList.add("hidden");
     $("boardHint").classList.remove("hidden");
+    $("tab-opencode").classList.add("hidden");
+    $("tab-ollama").classList.add("hidden");
+    selectTab("board");
+  }
+
+  // --- helpers -------------------------------------------------------------
+  function fmtTime(v) {
+    if (v == null) return "";
+    let ms = v;
+    if (typeof v === "string") { const p = Date.parse(v); if (!isNaN(p)) ms = p; else return v; }
+    if (typeof ms === "number") { if (ms < 1e12) ms *= 1000; }
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+  }
+  function fmtBytes(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "";
+    const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(n >= 10 || i === 0 ? 0 : 1) + " " + u[i];
+  }
+  function item(title, id, when) {
+    const n = el("div", "item");
+    const left = el("div"); left.appendChild(el("div", "t", title)); left.appendChild(el("div", "id", id));
+    n.appendChild(left);
+    if (when) n.appendChild(el("div", "when", when));
+    return n;
+  }
+
+  // --- OpenCode: session list ---------------------------------------------
+  async function loadOpencode() {
+    const list = $("ocList"); list.textContent = "";
+    list.appendChild(el("div", "empty", "Loading sessions…"));
+    // The route name has varied across OpenCode versions; try both.
+    let r = await api("/opencode/session");
+    if (!r.ok && r.status === 404) r = await api("/opencode/sessions");
+    if (!r.ok) {
+      list.textContent = "";
+      list.appendChild(el("div", "empty",
+        "Session listing unavailable (" + r.status + "). See the OpenAPI spec or use the API console."));
+      $("ocCount").textContent = "";
+      return;
+    }
+    const rows = Array.isArray(r.data) ? r.data
+      : (r.data && Array.isArray(r.data.sessions) ? r.data.sessions : []);
+    list.textContent = "";
+    $("ocCount").textContent = rows.length + " session" + (rows.length === 1 ? "" : "s");
+    if (!rows.length) { list.appendChild(el("div", "empty", "No sessions yet.")); return; }
+    rows.forEach((s) => {
+      const t = (s.time && (s.time.updated || s.time.created)) || s.updatedAt || s.createdAt || s.updated || s.created;
+      list.appendChild(item(s.title || s.id || "(untitled)", s.id || "", fmtTime(t)));
+    });
+  }
+
+  // --- Ollama: models + pull ----------------------------------------------
+  async function loadOllama() {
+    const list = $("olList"); list.textContent = "";
+    list.appendChild(el("div", "empty", "Loading models…"));
+    const r = await api("/ollama/api/tags");
+    list.textContent = "";
+    if (!r.ok) { list.appendChild(el("div", "empty", "Model list unavailable (" + r.status + ").")); return; }
+    const models = (r.data && r.data.models) || [];
+    if (!models.length) { list.appendChild(el("div", "empty", "No models installed. Pull one above.")); return; }
+    models.forEach((m) => {
+      list.appendChild(item(m.name || m.model || "(model)",
+        fmtBytes(m.size) + (m.details && m.details.parameter_size ? " · " + m.details.parameter_size : ""),
+        fmtTime(m.modified_at)));
+    });
+  }
+
+  async function ollamaPull() {
+    const name = $("olName").value.trim();
+    if (!name) { $("olStatus").textContent = "Enter a model name."; return; }
+    const btn = $("olPull"); btn.disabled = true;
+    $("olStatus").textContent = "pulling " + name + " … (may take a while)";
+    const r = await api("/ollama/api/pull", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name, stream: false }),
+    });
+    btn.disabled = false;
+    if (r.ok) {
+      const st = (r.data && (r.data.status || r.data.error)) || "done";
+      $("olStatus").textContent = "pull " + (r.data && r.data.error ? "failed: " + r.data.error : st);
+      loadOllama();
+    } else {
+      $("olStatus").textContent = "pull failed (" + r.status + ")" +
+        (r.status === 502 ? " — likely the gateway timeout; try a smaller model or the artifact cache." : "");
+    }
   }
 
   // --- Board ---------------------------------------------------------------
@@ -319,13 +448,14 @@
   }
 
   // --- Tabs ----------------------------------------------------------------
+  const TABS = ["board", "opencode", "ollama", "services", "console"];
   function selectTab(name) {
-    ["board", "services", "console"].forEach((t) => {
+    TABS.forEach((t) => {
       $("tab-" + t).setAttribute("aria-selected", String(t === name));
       $("panel-" + t).classList.toggle("hidden", t !== name);
     });
   }
-  ["board", "services", "console"].forEach((t) => {
+  TABS.forEach((t) => {
     const tab = $("tab-" + t);
     tab.addEventListener("click", () => selectTab(t));
     tab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectTab(t); } });
@@ -335,6 +465,10 @@
   $("signout").addEventListener("click", signout);
   $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
   $("cSend").addEventListener("click", consoleSend);
+  $("ocRefresh").addEventListener("click", loadOpencode);
+  $("olRefresh").addEventListener("click", loadOllama);
+  $("olPull").addEventListener("click", ollamaPull);
+  $("olName").addEventListener("keydown", (e) => { if (e.key === "Enter") ollamaPull(); });
 
   // Boot: demo connects immediately; a stored token auto-connects.
   if (DEMO) { connect(); }
@@ -351,6 +485,19 @@
       return Promise.resolve({ status: 200, ok: true, data: { ok: true } });
     if (path === "/weftmark/v0/kanban")
       return Promise.resolve({ status: 200, ok: true, data: DEMO_BOARD });
+    if (path === "/opencode/session" || path === "/opencode/sessions")
+      return Promise.resolve({ status: 200, ok: true, data: [
+        { id: "ses_7Kq2", title: "Harden ingest guardrails", time: { created: Date.now() - 5400000, updated: Date.now() - 600000 } },
+        { id: "ses_3Ab9", title: "DetCordon tracer review", time: { created: Date.now() - 86400000, updated: Date.now() - 4200000 } },
+        { id: "ses_1Zx0", title: "Firecracker jailer profile", time: { created: Date.now() - 172800000, updated: Date.now() - 172000000 } },
+      ] });
+    if (path === "/ollama/api/tags")
+      return Promise.resolve({ status: 200, ok: true, data: { models: [
+        { name: "gemma3:e2b", size: 2400000000, modified_at: new Date(Date.now() - 3600000).toISOString(), details: { parameter_size: "2.3B" } },
+        { name: "qwen2.5:0.5b", size: 400000000, modified_at: new Date(Date.now() - 172800000).toISOString(), details: { parameter_size: "0.5B" } },
+      ] } });
+    if (path === "/ollama/api/pull")
+      return Promise.resolve({ status: 200, ok: true, data: { status: "success (demo)" } });
     return Promise.resolve({ status: 200, ok: true, data: { demo: true, path } });
   }
   const DEMO_BOARD = {
