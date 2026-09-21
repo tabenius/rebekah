@@ -95,6 +95,7 @@ dockerTools.buildLayeredImage {
       "REBEKAH_GATEWAY_HOST=127.0.0.1"
       "REBEKAH_GATEWAY_PORT=8080"
       "REBEKAH_GATEWAY_EXPOSE=weftmark"
+      "REBEKAH_CONSOLE_ROOT=${weftmark}/share/weftmark/review"
     ];
     ExposedPorts = { "8080/tcp" = { }; };
     WorkingDir = "/workspace";
