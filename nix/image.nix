@@ -98,7 +98,7 @@ dockerTools.buildLayeredImage {
       "REBEKAH_GATEWAY_ENABLE=1"
       "REBEKAH_GATEWAY_HOST=127.0.0.1"
       "REBEKAH_GATEWAY_PORT=8080"
-      "REBEKAH_GATEWAY_EXPOSE=weftmark"
+      "REBEKAH_GATEWAY_EXPOSE=weftmark opencode ollama"
       "REBEKAH_GATEWAY_UI=1"
       "REBEKAH_GATEWAY_UI_DIR=/usr/local/share/rebekah/ui"
     ];

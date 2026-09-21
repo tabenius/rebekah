@@ -133,8 +133,10 @@ only and path-traversal-safe, under a strict `Content-Security-Policy`
 (`connect-src 'self'`). Disable it with `REBEKAH_GATEWAY_UI=0`.
 
 Only **allow-listed** backends are reachable. `REBEKAH_GATEWAY_EXPOSE` defaults
-to `weftmark` (the coordination / evidence / review board — the "kanban"
-surface); add `opencode`, `sylvae`, or `ollama` to expose more. Each is reached
+to `weftmark opencode ollama`, so the console's board, OpenCode and Ollama
+panels all work out of the box; `sylvae` stays opt-in. Note that exposing
+`opencode` means the gateway credential can drive agents — narrow the list (e.g.
+`REBEKAH_GATEWAY_EXPOSE=weftmark`) if that isn't wanted. Each backend is reached
 under its own prefix (`/weftmark/…`, `/opencode/…`); the gateway strips the
 prefix and re-authenticates to OpenCode itself, so a client never handles the
 OpenCode password.

@@ -158,6 +158,21 @@ trav="$(body --path-as-is "$base/ui/../../../../../../etc/passwd")"
 printf '%s' "$trav" | grep -q 'root:' \
   && fail "path traversal escaped the UI dir!" || pass "path traversal is contained"
 
+# The default REBEKAH_GATEWAY_EXPOSE must include opencode + ollama so the
+# console's product panels appear out of the box.
+def_port="$(free_port)"
+REBEKAH_GATEWAY_PORT="$def_port" REBEKAH_GATEWAY_TOKEN="$token" \
+  REBEKAH_GATEWAY_UI_DIR="$repo_root/nix/ui" \
+  "$python" "$gateway" >"$work/gwd.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$def_port/healthz" || fail "default-expose gateway did not start"
+def_info="$(body -H "Authorization: Bearer $token" "http://127.0.0.1:$def_port/api/info")"
+if printf '%s' "$def_info" | grep -q '"opencode"' && printf '%s' "$def_info" | grep -q '"ollama"'; then
+  pass "default expose includes opencode + ollama"
+else
+  fail "default expose missing opencode/ollama: $def_info"
+fi
+
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'
 if ! "$python" -c 'import jwt, cryptography' >/dev/null 2>&1; then

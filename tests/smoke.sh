@@ -120,13 +120,24 @@ for _ in $(seq 1 90); do
       printf 'failed: gateway did not proxy an authenticated request (got %s)\n' "$gw_auth" >&2
       exit 1
     fi
-    # An unexposed backend is 404 even with a valid token (opencode is opt-in).
+    # An unexposed backend is 404 even with a valid token (sylvae stays opt-in).
     gw_hidden="$("$runtime" exec "$name" \
       curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
       -H "Authorization: Bearer $gw_token" \
-      http://127.0.0.1:8080/opencode/global/health)"
+      http://127.0.0.1:8080/sylvae/)"
     if [[ "$gw_hidden" != 404 ]]; then
       printf 'failed: gateway exposed an opt-in backend (got %s)\n' "$gw_hidden" >&2
+      exit 1
+    fi
+    # OpenCode is exposed by default now; reaching it through the gateway also
+    # proves the gateway injects OpenCode's Basic auth (the client only holds the
+    # gateway token). /global/health returns 200 once OpenCode is authenticated.
+    gw_oc="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+      -H "Authorization: Bearer $gw_token" \
+      http://127.0.0.1:8080/opencode/global/health)"
+    if [[ "$gw_oc" != 200 ]]; then
+      printf 'failed: gateway did not proxy OpenCode with injected Basic auth (got %s)\n' "$gw_oc" >&2
       exit 1
     fi
     # Web console: served static (unauthenticated shell), and /api/info authed.
