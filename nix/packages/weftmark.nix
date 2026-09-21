@@ -24,6 +24,11 @@ python3Packages.buildPythonApplication {
   pythonImportsCheck = [ "weftmark" "weftmark.http.server" ];
 
   postInstall = ''
+    # Ship WeftMark's real review/kanban client with the runtime. Rebekah's
+    # gateway serves it under the same authenticated origin as /v0/kanban.
+    mkdir -p $out/share/weftmark/review
+    cp -R web/review/. $out/share/weftmark/review/
+
     makeWrapper ${python3Packages.python.interpreter} $out/bin/weftmark-http \
       --prefix PYTHONPATH : "$out/${python3Packages.python.sitePackages}" \
       --add-flags "-m weftmark.http.server"
