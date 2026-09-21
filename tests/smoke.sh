@@ -120,6 +120,27 @@ for _ in $(seq 1 90); do
       printf 'failed: gateway did not proxy an authenticated request (got %s)\n' "$gw_auth" >&2
       exit 1
     fi
+    # The bundled console is a real WeftMark client, protected by a browser
+    # session. Its native /v0 API is proxied under the same authenticated origin.
+    gw_session="$("$runtime" exec "$name" curl -s -o /dev/null -w '%{http_code}' \
+      -c /tmp/gateway-cookie -H 'Content-Type: application/json' \
+      --data "{\"token\":\"$gw_token\"}" http://127.0.0.1:8080/session)"
+    if [[ "$gw_session" != 204 ]]; then
+      printf 'failed: gateway browser session exchange failed (got %s)\n' "$gw_session" >&2
+      exit 1
+    fi
+    gw_console="$("$runtime" exec "$name" curl -s -b /tmp/gateway-cookie \
+      http://127.0.0.1:8080/)"
+    if [[ "$gw_console" != *"WeftMark"* ]]; then
+      printf 'failed: packaged WeftMark console was not served\n' >&2
+      exit 1
+    fi
+    gw_board="$("$runtime" exec "$name" curl -s -o /dev/null -w '%{http_code}' \
+      -b /tmp/gateway-cookie http://127.0.0.1:8080/v0/kanban)"
+    if [[ "$gw_board" != 200 ]]; then
+      printf 'failed: same-origin WeftMark board API returned %s\n' "$gw_board" >&2
+      exit 1
+    fi
     # An unexposed backend is 404 even with a valid token (opencode is opt-in).
     gw_hidden="$("$runtime" exec "$name" \
       curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
@@ -130,7 +151,7 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
-    printf 'ok: core services, governed WeftMark evidence, service isolation, and authenticated gateway are healthy\n'
+    printf 'ok: core services, governed evidence, isolation, authenticated gateway, and built-in console are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then
