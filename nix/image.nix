@@ -68,6 +68,10 @@ dockerTools.buildLayeredImage {
       'exec ${gatewayPython}/bin/python3 /usr/local/lib/rebekah/gateway.py "$@"' \
       > usr/local/bin/rebekah-gateway
     chmod 0555 usr/local/bin/rebekah-gateway
+
+    # The gateway's built-in web console (static, served same-origin).
+    mkdir -p usr/local/share/rebekah
+    cp -r ${./ui} usr/local/share/rebekah/ui
   '';
 
   config = {
@@ -95,6 +99,8 @@ dockerTools.buildLayeredImage {
       "REBEKAH_GATEWAY_HOST=127.0.0.1"
       "REBEKAH_GATEWAY_PORT=8080"
       "REBEKAH_GATEWAY_EXPOSE=weftmark"
+      "REBEKAH_GATEWAY_UI=1"
+      "REBEKAH_GATEWAY_UI_DIR=/usr/local/share/rebekah/ui"
     ];
     ExposedPorts = { "8080/tcp" = { }; };
     WorkingDir = "/workspace";

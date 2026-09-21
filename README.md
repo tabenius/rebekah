@@ -107,6 +107,25 @@ an upstream error `502` — backend details are never leaked. PyJWT is imported
 lazily, so the token path (and the whole off-grid story) works on the Python
 standard library alone.
 
+### Web console
+
+The gateway serves a built-in, dependency-free **web console** (open `/` or
+`/ui/`). It's a single static page — no CDN, no build step, so it works
+off-grid — that authenticates with the same token or OIDC bearer and gives a
+human-in-the-loop guest one screen over the products:
+
+- a **board** rendering WeftMark's live Kanban projection (`/v0/kanban`) across
+  its `backlog → active → review → ready → done` lanes, with readiness, evidence
+  counts and attention flags;
+- **service health** tiles for each exposed backend;
+- an **API console** to send an authenticated request to any exposed backend.
+
+The page itself is public (it's just the app shell); every data call it makes
+goes back through the authenticated proxy, and `GET /api/info` (which tells the
+page which backends are exposed) requires auth. Static serving is `GET`/`HEAD`
+only and path-traversal-safe, under a strict `Content-Security-Policy`
+(`connect-src 'self'`). Disable it with `REBEKAH_GATEWAY_UI=0`.
+
 Only **allow-listed** backends are reachable. `REBEKAH_GATEWAY_EXPOSE` defaults
 to `weftmark` (the coordination / evidence / review board — the "kanban"
 surface); add `opencode`, `sylvae`, or `ollama` to expose more. Each is reached
@@ -288,6 +307,7 @@ four services.
 - `nix/entrypoint.sh` implements supervision, diagnostics, health checks, and
   shutdown.
 - `nix/gateway.py` is the authenticated API gateway (`rebekah-gateway`).
+- `nix/ui/` is the gateway's built-in web console (static, served same-origin).
 - `nix/packages/` packages WeftMark and Sylvae from their pinned sources.
 - `tests/smoke.sh` verifies the loaded image through Docker.
 - `tests/gateway.sh` (+ `tests/gateway-oidc.py`) unit-tests the gateway's auth,

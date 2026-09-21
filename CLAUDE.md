@@ -19,7 +19,10 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
 - `nix/govern.sh` — `rebekah-govern`: attaches connector output to WeftMark as
   `governance` evidence and requires it for a review decision.
 - `nix/gateway.py` — `rebekah-gateway`: the single authenticated entry point for
-  Rebekah's API (token and/or OIDC auth), fronting the loopback backends.
+  Rebekah's API (token and/or OIDC auth), fronting the loopback backends. Also
+  serves the built-in web console and `GET /api/info`.
+- `nix/ui/index.html` — the gateway's built-in web console (static, same-origin:
+  WeftMark board + service health + an authenticated API console).
 - `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
@@ -123,6 +126,12 @@ them in any change:
      `/run/rebekah/gateway-token`) and passed to the gateway via env, never
      argv. Guarded by `tests/gateway.sh` and `tests/smoke.sh`. No extra
      capability is required; do not add one.
+   - The built-in web console (`nix/ui/`) is served static and same-origin
+     (`GET`/`HEAD` only, path-traversal-safe, strict CSP with `connect-src
+     'self'`). The page shell is public; every data call it makes is
+     authenticated, and `GET /api/info` requires auth. The console renders
+     untrusted backend data via `textContent`/`createElement`, never
+     `innerHTML` — keep it that way.
 8. **Least-privilege run.** The supervisor needs only five Linux capabilities:
    `CHOWN` (set up state dirs), `SETUID`/`SETGID` (launch each service as its own
    uid), `KILL` (forward termination to the cross-uid children), and
