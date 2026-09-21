@@ -91,13 +91,33 @@ start_upstream "$up_port"
 wait_url "http://127.0.0.1:$up_port/" || fail "mock upstream did not start"
 
 token="s3cr3t-$(date +%s)"
+mkdir -p "$work/console"
+printf '<!doctype html><title>REAL CONSOLE</title>' >"$work/console/index.html"
+printf 'console asset' >"$work/console/app.js"
 REBEKAH_GATEWAY_HOST=127.0.0.1 REBEKAH_GATEWAY_PORT="$gw_port" \
   REBEKAH_GATEWAY_TOKEN="$token" REBEKAH_GATEWAY_EXPOSE="weftmark" \
+  REBEKAH_CONSOLE_ROOT="$work/console" \
   WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$up_port" \
   "$python" "$gateway" >"$work/gw.log" 2>&1 &
 pids+=("$!")
 wait_url "http://127.0.0.1:$gw_port/healthz" || fail "gateway did not start (token mode)"
 pass "starts and serves /healthz unauthenticated"
+
+[ "$(code "http://127.0.0.1:$gw_port/")" = 200 ] \
+  && pass "unauthenticated root serves sign-in screen" || fail "sign-in screen missing"
+login="$(body "http://127.0.0.1:$gw_port/")"
+[[ "$login" == *"Rebekah console"* ]] || fail "root did not serve the sign-in screen"
+
+cookie="$work/cookie"
+[ "$(code -c "$cookie" -H 'Content-Type: application/json' \
+     --data "{\"token\":\"$token\"}" "http://127.0.0.1:$gw_port/session")" = 204 ] \
+  && pass "valid token creates browser session" || fail "session exchange failed"
+console="$(body -b "$cookie" "http://127.0.0.1:$gw_port/")"
+[[ "$console" == *"REAL CONSOLE"* ]] \
+  && pass "session serves packaged console" || fail "authenticated console missing"
+[ "$(code -H 'Content-Type: application/json' --data '{"token":"wrong"}' \
+     "http://127.0.0.1:$gw_port/session")" = 401 ] \
+  && pass "invalid token cannot create session" || fail "invalid session token accepted"
 
 [ "$(code "http://127.0.0.1:$gw_port/weftmark/healthz")" = 401 ] \
   && pass "no credential -> 401" || fail "missing-auth not 401"
@@ -116,6 +136,10 @@ root="$(body -H "Authorization: Bearer $token" "http://127.0.0.1:$gw_port/weftma
 # Query string preserved.
 q="$(body -H "Authorization: Bearer $token" "http://127.0.0.1:$gw_port/weftmark/a?b=c")"
 [ "$q" = "UPSTREAM path=/a?b=c" ] && pass "query string preserved" || fail "query lost: '$q'"
+
+native="$(body -b "$cookie" "http://127.0.0.1:$gw_port/v0/kanban?x=1")"
+[ "$native" = "UPSTREAM path=/v0/kanban?x=1" ] \
+  && pass "console-native /v0 route reaches WeftMark" || fail "native /v0 route wrong: '$native'"
 
 # A backend that is NOT exposed is 404 even with a valid token (no info leak).
 [ "$(code -H "Authorization: Bearer $token" "http://127.0.0.1:$gw_port/opencode/x")" = 404 ] \
