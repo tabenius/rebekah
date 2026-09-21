@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rebekah Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5b6472;
+    --line: #e3e6ea; --accent: #3b5bdb; --accent-ink: #ffffff;
+    --ok: #2b8a3e; --warn: #b8860b; --bad: #c92a2a; --chip: #eef1f6;
+    --lane-backlog: #8792a2; --lane-active: #3b5bdb; --lane-review: #b8860b;
+    --lane-ready: #2b8a3e; --lane-done: #5b6472;
+    --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a; --panel: #1c1f26; --ink: #e8eaed; --muted: #9aa4b2;
+      --line: #2b3038; --accent: #6b8afd; --accent-ink: #10131a; --chip: #262b34;
+      --ok: #51cf66; --warn: #ffd43b; --bad: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+    font-size: 14px; line-height: 1.45; }
+  header { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 5; }
+  .brand { font-weight: 700; font-size: 17px; letter-spacing: .2px; }
+  .brand small { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 8px; }
+  .grow { flex: 1 1 auto; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted);
+    display: inline-block; vertical-align: middle; margin-right: 6px; }
+  .dot.on { background: var(--ok); } .dot.off { background: var(--bad); }
+  .status { color: var(--muted); font-size: 12.5px; }
+  input, select, button, textarea { font: inherit; color: inherit; }
+  input[type=password], input[type=text], select, textarea {
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 9px; }
+  textarea { width: 100%; font-family: var(--mono); font-size: 12.5px; min-height: 74px; }
+  button { background: var(--accent); color: var(--accent-ink); border: 0;
+    border-radius: 8px; padding: 8px 13px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .authbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .authbar input { min-width: 210px; }
+  main { padding: 16px; max-width: 1400px; margin: 0 auto; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tab { padding: 8px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent;
+    font-weight: 600; }
+  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .hidden { display: none !important; }
+  .banner { background: var(--chip); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; color: var(--muted); margin-bottom: 12px; }
+  .board { display: grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 12px; }
+  @media (max-width: 900px) { .board { grid-auto-flow: column; grid-auto-columns: 78%;
+    grid-template-columns: none; overflow-x: auto; } }
+  .lane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    display: flex; flex-direction: column; min-height: 80px; }
+  .lane h3 { margin: 0; padding: 10px 12px; font-size: 12px; text-transform: uppercase;
+    letter-spacing: .6px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; }
+  .lane h3 .n { color: var(--muted); }
+  .lane[data-lane] h3 { border-left: 3px solid var(--muted); }
+  .lane[data-lane="backlog"] h3 { border-left-color: var(--lane-backlog); }
+  .lane[data-lane="active"] h3 { border-left-color: var(--lane-active); }
+  .lane[data-lane="review"] h3 { border-left-color: var(--lane-review); }
+  .lane[data-lane="ready"] h3 { border-left-color: var(--lane-ready); }
+  .lane[data-lane="done"] h3 { border-left-color: var(--lane-done); }
+  .cards { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; }
+  .card .t { font-weight: 600; }
+  .card .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+  .card .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; align-items: center; }
+  .chip { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--chip);
+    color: var(--muted); white-space: nowrap; }
+  .chip.task { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); }
+  .chip.att { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px; }
+  .tile .name { font-weight: 700; text-transform: capitalize; }
+  .tile .sub { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 3px; }
+  .tile .state { margin-top: 9px; font-weight: 600; }
+  .console-grid { display: grid; grid-template-columns: 130px 90px 1fr auto; gap: 8px; align-items: start; }
+  @media (max-width: 700px) { .console-grid { grid-template-columns: 1fr 1fr; } }
+  pre.out { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px; overflow: auto; font-family: var(--mono); font-size: 12.5px; margin-top: 12px;
+    max-height: 420px; }
+  .empty { color: var(--muted); padding: 10px 12px; font-size: 12.5px; }
+  code.k { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Rebekah <small>governed agentic runtime</small></span>
+  <span class="grow"></span>
+  <div class="authbar" id="authbar">
+    <span class="status" id="conn"><span class="dot" id="dot"></span><span id="connText">not connected</span></span>
+    <input type="password" id="token" placeholder="Bearer token" autocomplete="off" spellcheck="false">
+    <button id="connect">Connect</button>
+    <button id="signout" class="ghost hidden">Sign out</button>
+  </div>
+</header>
+<main>
+  <div class="banner hidden" id="demoBanner">Demo preview — showing sample data. Open this
+    page through a running <code class="k">rebekah-gateway</code> and connect with a token to see live state.</div>
+  <div class="banner hidden" id="err"></div>
+
+  <div class="tabs" role="tablist">
+    <div class="tab" id="tab-board" role="tab" aria-selected="true" tabindex="0">Board</div>
+    <div class="tab" id="tab-services" role="tab" aria-selected="false" tabindex="0">Services</div>
+    <div class="tab" id="tab-console" role="tab" aria-selected="false" tabindex="0">API console</div>
+  </div>
+
+  <section id="panel-board">
+    <div class="empty" id="boardHint">Connect to load the WeftMark coordination board.</div>
+    <div class="board hidden" id="board"></div>
+  </section>
+
+  <section id="panel-services" class="hidden">
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section id="panel-console" class="hidden">
+    <p class="status">Send an authenticated request through the gateway to any exposed backend.</p>
+    <div class="console-grid">
+      <select id="cBackend" aria-label="backend"></select>
+      <select id="cMethod" aria-label="method">
+        <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option>
+      </select>
+      <input type="text" id="cPath" value="/v0/kanban" aria-label="path" placeholder="/path">
+      <button id="cSend">Send</button>
+    </div>
+    <textarea id="cBody" placeholder="Request body (JSON, optional)"></textarea>
+    <pre class="out" id="cOut">—</pre>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  const params = new URLSearchParams(location.search);
+  const DEMO = params.has("demo") || location.protocol === "file:";
+  const TKEY = "rebekah.token";
+  const HEALTH = {
+    weftmark: "/weftmark/healthz", opencode: "/opencode/global/health",
+    sylvae: "/sylvae/", ollama: "/ollama/api/version",
+  };
+  const LANES = ["backlog", "active", "review", "ready", "done"];
+  let token = "";
+  try { token = sessionStorage.getItem(TKEY) || ""; } catch (e) {}
+  let info = null, boardTimer = null;
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  const showErr = (msg) => {
+    const b = $("err");
+    if (!msg) { b.classList.add("hidden"); return; }
+    b.textContent = msg; b.classList.remove("hidden");
+  };
+
+  async function api(path, opts) {
+    opts = opts || {};
+    if (DEMO) return demo(path, opts);
+    const headers = Object.assign({}, opts.headers || {});
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const res = await fetch(path, { method: opts.method || "GET", headers, body: opts.body });
+    const text = await res.text();
+    let data = text;
+    try { data = JSON.parse(text); } catch (e) {}
+    return { status: res.status, ok: res.ok, data };
+  }
+
+  function setConnected(ok) {
+    $("dot").className = "dot " + (ok ? "on" : "off");
+    $("connText").textContent = ok
+      ? (DEMO ? "demo" : "connected · " + (info.auth || []).join("+") + " · " + (info.expose || []).join(", "))
+      : "not connected";
+    $("signout").classList.toggle("hidden", !ok || DEMO);
+    $("token").classList.toggle("hidden", ok);
+    $("connect").classList.toggle("hidden", ok);
+  }
+
+  async function connect() {
+    showErr("");
+    const t = $("token").value.trim();
+    if (t) { token = t; try { sessionStorage.setItem(TKEY, t); } catch (e) {} }
+    const r = await api("/api/info");
+    if (!r.ok) {
+      setConnected(false);
+      showErr(r.status === 401 ? "Unauthorized — check the bearer token." : "Gateway error (" + r.status + ").");
+      return;
+    }
+    info = r.data;
+    setConnected(true);
+    $("demoBanner").classList.toggle("hidden", !DEMO);
+    buildBackendPicker();
+    loadBoard();
+    loadServices();
+    if (!boardTimer) boardTimer = setInterval(loadBoard, 8000);
+  }
+
+  function signout() {
+    token = ""; info = null;
+    try { sessionStorage.removeItem(TKEY); } catch (e) {}
+    if (boardTimer) { clearInterval(boardTimer); boardTimer = null; }
+    $("token").value = "";
+    setConnected(false);
+    $("board").classList.add("hidden");
+    $("boardHint").classList.remove("hidden");
+  }
+
+  // --- Board ---------------------------------------------------------------
+  async function loadBoard() {
+    if (!info || (info.expose && info.expose.indexOf("weftmark") < 0)) {
+      $("boardHint").textContent = "WeftMark is not exposed through this gateway.";
+      return;
+    }
+    const r = await api("/weftmark/v0/kanban");
+    if (!r.ok) { $("boardHint").textContent = "Board unavailable (" + r.status + ")."; return; }
+    renderBoard(r.data);
+  }
+
+  function laneCards(data, lane) {
+    const out = [];
+    (data.cards || []).forEach((c) => { if (c.lane === lane) out.push(c); });
+    (data.plan_cards || []).forEach((c) => { if (c.lane === lane) out.push(c); });
+    return out;
+  }
+
+  function renderBoard(data) {
+    const board = $("board");
+    board.textContent = "";
+    $("boardHint").classList.add("hidden");
+    board.classList.remove("hidden");
+    LANES.forEach((lane) => {
+      const items = laneCards(data, lane);
+      const laneEl = el("div", "lane"); laneEl.setAttribute("data-lane", lane);
+      const h = el("h3"); h.appendChild(el("span", null, lane));
+      h.appendChild(el("span", "n", String(items.length)));
+      laneEl.appendChild(h);
+      const wrap = el("div", "cards");
+      if (!items.length) wrap.appendChild(el("div", "empty", "—"));
+      items.forEach((c) => wrap.appendChild(card(c)));
+      laneEl.appendChild(wrap);
+      board.appendChild(laneEl);
+    });
+  }
+
+  function card(c) {
+    const n = el("div", "card");
+    n.appendChild(el("div", "t", c.title || c.id));
+    n.appendChild(el("div", "id", c.id));
+    const meta = el("div", "meta");
+    if (c.kind === "task") {
+      meta.appendChild(el("span", "chip task", "task"));
+      if (c.task_state) meta.appendChild(el("span", "chip", c.task_state));
+      if (c.priority) meta.appendChild(el("span", "chip", "P:" + c.priority));
+    } else {
+      if (c.readiness) {
+        const good = c.readiness === "ready" || c.readiness === "ready_with_follow_up";
+        meta.appendChild(el("span", "chip " + (good ? "ok" : "warn"), c.readiness));
+      }
+      if (c.lifecycle_state) meta.appendChild(el("span", "chip", c.lifecycle_state));
+      if (c.evidence && c.evidence.total != null) {
+        meta.appendChild(el("span", "chip", "ev " + (c.evidence.current || 0) + "/" + c.evidence.total));
+      }
+    }
+    (c.attention || []).forEach((a) => meta.appendChild(el("span", "chip att", String(a))));
+    n.appendChild(meta);
+    return n;
+  }
+
+  // --- Services ------------------------------------------------------------
+  async function loadServices() {
+    const tiles = $("tiles");
+    tiles.textContent = "";
+    const exposed = (info && info.expose) || [];
+    if (!exposed.length) { tiles.appendChild(el("div", "empty", "No backends exposed.")); return; }
+    exposed.forEach(async (name) => {
+      const tile = el("div", "tile");
+      tile.appendChild(el("div", "name", name));
+      const sub = el("div", "sub", HEALTH[name] || "/"); tile.appendChild(sub);
+      const state = el("div", "state", "checking…"); tile.appendChild(state);
+      tiles.appendChild(tile);
+      const r = await api(HEALTH[name] || "/" + name + "/");
+      state.textContent = r.ok ? "● healthy" : "● unreachable (" + r.status + ")";
+      state.style.color = r.ok ? "var(--ok)" : "var(--bad)";
+    });
+  }
+
+  // --- API console ---------------------------------------------------------
+  function buildBackendPicker() {
+    const sel = $("cBackend");
+    sel.textContent = "";
+    ((info && info.expose) || []).forEach((name) => {
+      const o = document.createElement("option"); o.value = name; o.textContent = name;
+      sel.appendChild(o);
+    });
+  }
+  async function consoleSend() {
+    const backend = $("cBackend").value;
+    if (!backend) { $("cOut").textContent = "No backend exposed."; return; }
+    let path = $("cPath").value.trim(); if (path && path[0] !== "/") path = "/" + path;
+    const method = $("cMethod").value;
+    const bodyText = $("cBody").value.trim();
+    const opts = { method, headers: {} };
+    if (bodyText && method !== "GET") { opts.body = bodyText; opts.headers["Content-Type"] = "application/json"; }
+    $("cOut").textContent = "…";
+    const r = await api("/" + backend + path, opts);
+    const shown = typeof r.data === "string" ? r.data : JSON.stringify(r.data, null, 2);
+    $("cOut").textContent = "HTTP " + r.status + "\n\n" + shown;
+  }
+
+  // --- Tabs ----------------------------------------------------------------
+  function selectTab(name) {
+    ["board", "services", "console"].forEach((t) => {
+      $("tab-" + t).setAttribute("aria-selected", String(t === name));
+      $("panel-" + t).classList.toggle("hidden", t !== name);
+    });
+  }
+  ["board", "services", "console"].forEach((t) => {
+    const tab = $("tab-" + t);
+    tab.addEventListener("click", () => selectTab(t));
+    tab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectTab(t); } });
+  });
+
+  $("connect").addEventListener("click", connect);
+  $("signout").addEventListener("click", signout);
+  $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+  $("cSend").addEventListener("click", consoleSend);
+
+  // Boot: demo connects immediately; a stored token auto-connects.
+  if (DEMO) { connect(); }
+  else if (token) { connect(); }
+
+  // --- Demo data -----------------------------------------------------------
+  function demo(path) {
+    if (path === "/api/info")
+      return Promise.resolve({ status: 200, ok: true, data: {
+        service: "rebekah-gateway", expose: ["weftmark", "opencode", "ollama"],
+        auth: ["token", "oidc"], ui: true } });
+    if (path.indexOf("/healthz") >= 0 || path.indexOf("/api/version") >= 0 || path === "/sylvae/"
+        || path.indexOf("/global/health") >= 0)
+      return Promise.resolve({ status: 200, ok: true, data: { ok: true } });
+    if (path === "/weftmark/v0/kanban")
+      return Promise.resolve({ status: 200, ok: true, data: DEMO_BOARD });
+    return Promise.resolve({ status: 200, ok: true, data: { demo: true, path } });
+  }
+  const DEMO_BOARD = {
+    schema: "weftmark.kanban-projection.v0",
+    counts: { cards: 4, plan_cards: 2, active_claims: 1 },
+    cards: [
+      { kind: "change_set", id: "cs-ingest-guardrails", title: "Ingest guardrails", lane: "active",
+        lifecycle_state: "active", readiness: "not_ready", evidence: { total: 3, current: 2 }, attention: ["dirty_worktree"] },
+      { kind: "change_set", id: "cs-hypervisor-tracer", title: "Hypervisor DOM k+1 tracer", lane: "review",
+        lifecycle_state: "review", readiness: "not_ready", evidence: { total: 5, current: 5 }, attention: ["stale_review"] },
+      { kind: "change_set", id: "cs-cordon-egress", title: "Cordon egress policy", lane: "ready",
+        lifecycle_state: "review", readiness: "ready", evidence: { total: 4, current: 4 }, attention: [] },
+      { kind: "change_set", id: "cs-bootstrap", title: "Bootstrap contract", lane: "done",
+        lifecycle_state: "merged", readiness: "ready", evidence: { total: 2, current: 2 }, attention: [] },
+    ],
+    plan_cards: [
+      { kind: "task", id: "task-firecracker-jailer", title: "Firecracker jailer profile", lane: "backlog",
+        task_state: "planned", priority: "high", attention: [] },
+      { kind: "task", id: "task-detcordon-probes", title: "DetCordon memory-reader probes", lane: "active",
+        task_state: "in_progress", priority: "medium", attention: ["blocked"] },
+    ],
+  };
+})();
+</script>
+</body>
+</html>

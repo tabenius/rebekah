@@ -34,7 +34,10 @@ from __future__ import annotations
 import base64
 import hmac
 import http.client
+import json
+import mimetypes
 import os
+import posixpath
 import ssl
 import sys
 import threading
@@ -107,6 +110,13 @@ class Config:
         }
         self.backends = {name: catalogue[name] for name in exposed if name in catalogue}
         self.unknown_exposed = [name for name in exposed if name not in catalogue]
+
+        # Built-in web console (served static, same-origin). On by default; the
+        # data calls it makes still go through the authenticated proxy.
+        self.ui_enabled = env.get("REBEKAH_GATEWAY_UI", "1").strip() not in ("0", "")
+        self.ui_dir = env.get(
+            "REBEKAH_GATEWAY_UI_DIR", "/usr/local/share/rebekah/ui"
+        ).strip()
 
     @property
     def tls_enabled(self):
@@ -247,10 +257,90 @@ def make_handler(cfg, auth):
             if self.command != "HEAD":
                 self.wfile.write(body)
 
+        def _serve_ui(self, rel):
+            # Static, same-origin console. GET/HEAD only; path-sanitized so a
+            # request can never escape the UI directory.
+            if self.command not in ("GET", "HEAD"):
+                self._fail(405, "method not allowed")
+                return
+            clean = posixpath.normpath("/" + rel).lstrip("/")
+            if not clean or clean == ".":
+                clean = "index.html"
+            full = os.path.realpath(os.path.join(cfg.ui_dir, clean))
+            root = os.path.realpath(cfg.ui_dir)
+            if full != root and not full.startswith(root + os.sep):
+                self._fail(404, "not found")
+                return
+            try:
+                with open(full, "rb") as handle:
+                    payload = handle.read()
+            except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
+                self._fail(404, "not found")
+                return
+            ctype = mimetypes.guess_type(full)[0] or "application/octet-stream"
+            if ctype.startswith("text/") or ctype in (
+                "application/javascript", "application/json",
+            ):
+                ctype += "; charset=utf-8"
+            headers = [
+                ("Content-Type", ctype),
+                ("X-Content-Type-Options", "nosniff"),
+                ("Referrer-Policy", "no-referrer"),
+                ("Content-Security-Policy",
+                 "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                 "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+                 "base-uri 'none'; frame-ancestors 'none'"),
+            ]
+            self._write_head(200, headers, len(payload))
+            if self.command != "HEAD":
+                self.wfile.write(payload)
+
+        def _serve_info(self):
+            principal = auth.principal(self.headers.get("Authorization"))
+            if principal is None:
+                self._fail(
+                    401, "unauthorized",
+                    extra_headers=[("WWW-Authenticate", 'Bearer realm="rebekah"')],
+                )
+                return
+            schemes = []
+            if cfg.token_enabled:
+                schemes.append("token")
+            if cfg.oidc_enabled:
+                schemes.append("oidc")
+            body = json.dumps({
+                "service": "rebekah-gateway",
+                "expose": sorted(cfg.backends),
+                "auth": schemes,
+                "ui": cfg.ui_enabled,
+            }).encode()
+            self._write_head(200, [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Cache-Control", "no-store"),
+            ], len(body))
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
         def _handle(self):
+            raw_path = self.path.split("?", 1)[0]
             if self.path in ("/healthz", "/healthz/"):
                 # Unauthenticated liveness only -- reveals nothing.
                 self._fail(200, "ok")
+                return
+
+            if cfg.ui_enabled:
+                if raw_path in ("/", "/ui", "/ui/"):
+                    if self.command not in ("GET", "HEAD"):
+                        self._fail(405, "method not allowed")
+                        return
+                    self._serve_ui("index.html")
+                    return
+                if raw_path.startswith("/ui/"):
+                    self._serve_ui(raw_path[len("/ui/"):])
+                    return
+
+            if raw_path in ("/api/info", "/api/info/"):
+                self._serve_info()
                 return
 
             first = self.path.lstrip("/").split("/", 1)[0].split("?", 1)[0]

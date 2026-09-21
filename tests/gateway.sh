@@ -93,6 +93,7 @@ wait_url "http://127.0.0.1:$up_port/" || fail "mock upstream did not start"
 token="s3cr3t-$(date +%s)"
 REBEKAH_GATEWAY_HOST=127.0.0.1 REBEKAH_GATEWAY_PORT="$gw_port" \
   REBEKAH_GATEWAY_TOKEN="$token" REBEKAH_GATEWAY_EXPOSE="weftmark" \
+  REBEKAH_GATEWAY_UI_DIR="$repo_root/nix/ui" \
   WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$up_port" \
   "$python" "$gateway" >"$work/gw.log" 2>&1 &
 pids+=("$!")
@@ -135,6 +136,27 @@ wait_url "http://127.0.0.1:$gw2_port/healthz" || fail "size-cap gateway did not 
 [ "$(code -H "Authorization: Bearer $token" -X POST --data "$big" \
      "http://127.0.0.1:$gw2_port/weftmark/x")" = 413 ] \
   && pass "body over cap -> 413" || fail "oversized body not 413"
+
+# === 2b. web console (static UI) + /api/info ================================
+printf '\n== web console + /api/info ==\n'
+base="http://127.0.0.1:$gw_port"
+[ "$(code "$base/")" = 200 ] && pass "/ serves the console (200)" || fail "/ not 200"
+ui_body="$(body "$base/ui/")"
+printf '%s' "$ui_body" | grep -q "Rebekah Console" \
+  && pass "/ui/ serves the console HTML" || fail "/ui/ missing console markup"
+curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
+  && pass "console served as text/html" || fail "console content-type wrong"
+
+# /api/info is authenticated and reports the exposed backends.
+[ "$(code "$base/api/info")" = 401 ] && pass "/api/info needs auth -> 401" || fail "/api/info not 401"
+info_body="$(body -H "Authorization: Bearer $token" "$base/api/info")"
+printf '%s' "$info_body" | grep -q '"weftmark"' \
+  && pass "/api/info lists exposed backends" || fail "/api/info missing expose: $info_body"
+
+# Path traversal out of the UI dir must not serve host files.
+trav="$(body --path-as-is "$base/ui/../../../../../../etc/passwd")"
+printf '%s' "$trav" | grep -q 'root:' \
+  && fail "path traversal escaped the UI dir!" || pass "path traversal is contained"
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'

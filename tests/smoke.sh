@@ -129,8 +129,21 @@ for _ in $(seq 1 90); do
       printf 'failed: gateway exposed an opt-in backend (got %s)\n' "$gw_hidden" >&2
       exit 1
     fi
+    # Web console: served static (unauthenticated shell), and /api/info authed.
+    gw_ui="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/ui/)"
+    if [[ "$gw_ui" != 200 ]]; then
+      printf 'failed: gateway did not serve the web console (got %s)\n' "$gw_ui" >&2
+      exit 1
+    fi
+    gw_info="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/api/info)"
+    if [[ "$gw_info" != 401 ]]; then
+      printf 'failed: /api/info was not authenticated (got %s)\n' "$gw_info" >&2
+      exit 1
+    fi
 
-    printf 'ok: core services, governed WeftMark evidence, service isolation, and authenticated gateway are healthy\n'
+    printf 'ok: core services, governed WeftMark evidence, service isolation, authenticated gateway, and web console are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then
