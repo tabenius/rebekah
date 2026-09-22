@@ -97,8 +97,17 @@ schemes flagship agent/kanban orchestrators use, and a request is accepted if
 
 | Scheme | Typical use | Credential | Enable with |
 | --- | --- | --- | --- |
+| **password** | default browser sign-in (username + password) | `POST /api/login` → opaque bearer session | on by default (`REBEKAH_AUTH_PASSWORD=1`); seeds an `admin` user |
 | **token** | internal / LAN / CI / service-to-service | `Authorization: Bearer <token>` (constant-time compared) | `REBEKAH_GATEWAY_TOKEN` (or a per-boot one is minted) |
 | **oidc** | external / SSO / human GUI guest | `Authorization: Bearer <JWT>` verified against the issuer's JWKS | `REBEKAH_OIDC_ISSUER` + `REBEKAH_OIDC_AUDIENCE` |
+
+**Signing in (default).** The console shows a username/password form. On first
+boot the gateway seeds an `admin` user (`REBEKAH_ADMIN_USER`) into a SQLite DB in
+its `0700` state dir, hashing passwords with `scrypt`. Set `REBEKAH_ADMIN_PASSWORD`
+for a known password; otherwise a random one is generated and **logged once** at
+startup — read it with `docker logs <container> | grep 'seeded admin'`. Login
+mints an opaque bearer session (`REBEKAH_SESSION_TTL`, default 12h); `POST
+/api/logout` revokes it. Only session-token hashes are stored.
 
 It **fails closed**: it refuses to start if bound beyond loopback without TLS, if
 no auth scheme is configured (never an open proxy), or with no exposed backend;

@@ -32,15 +32,19 @@ the whole off-grid story) works with the Python standard library alone.
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import http.client
 import json
 import mimetypes
 import os
 import posixpath
+import secrets
+import sqlite3
 import ssl
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # --- configuration (runtime env only; no secrets baked into the image) -------
@@ -121,6 +125,19 @@ class Config:
             "REBEKAH_GATEWAY_UI_DIR", "/usr/local/share/rebekah/ui"
         ).strip()
 
+        # SQLite username/password login (the default browser sign-in). On first
+        # start it seeds a default admin user; a successful login mints an opaque
+        # bearer session token. Password hashing is scrypt (stdlib). No secret is
+        # baked into the image -- the admin password is provided at runtime or a
+        # random one is generated and logged once.
+        self.password_enabled = env.get("REBEKAH_AUTH_PASSWORD", "1").strip() not in ("0", "")
+        self.auth_db = env.get(
+            "REBEKAH_AUTH_DB", "/var/lib/rebekah/gateway/auth.db"
+        ).strip()
+        self.admin_user = env.get("REBEKAH_ADMIN_USER", "admin").strip() or "admin"
+        self.admin_password = env.get("REBEKAH_ADMIN_PASSWORD", "")
+        self.session_ttl = int(env.get("REBEKAH_SESSION_TTL", str(12 * 3600)))
+
     @property
     def tls_enabled(self):
         return bool(self.tls_cert and self.tls_key)
@@ -146,9 +163,10 @@ class Config:
                 "refusing to bind %s without TLS: set REBEKAH_GATEWAY_TLS_CERT/"
                 "_KEY, or bind 127.0.0.1 and front it with a TLS proxy" % self.host
             )
-        if not self.token_enabled and not self.oidc_enabled:
+        if not (self.token_enabled or self.oidc_enabled or self.password_enabled):
             problems.append(
-                "no auth configured: set REBEKAH_GATEWAY_TOKEN (internal) and/or "
+                "no auth configured: keep REBEKAH_AUTH_PASSWORD=1 (SQLite login, "
+                "the default), or set REBEKAH_GATEWAY_TOKEN (internal) and/or "
                 "REBEKAH_OIDC_ISSUER + REBEKAH_OIDC_AUDIENCE (external)"
             )
         if self.tls_cert and not self.tls_key:
@@ -208,10 +226,120 @@ class OidcVerifier:
         return sub
 
 
+# --- SQLite username/password login ------------------------------------------
+
+class PasswordStore:
+    """SQLite-backed users + opaque bearer sessions; scrypt password hashing.
+
+    Only session-token *hashes* are stored, so a leaked DB never yields a live
+    bearer directly. All access is serialized under a lock (one shared
+    connection across the gateway's threads).
+    """
+
+    def __init__(self, path, session_ttl):
+        self.session_ttl = session_ttl
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(path, check_same_thread=False)
+        # The parent directory is normally 0700 in the image, but keep the
+        # credential database private even when an operator chooses another
+        # state path or copies it out of the volume.
+        os.chmod(path, 0o600)
+        with self._lock:
+            self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS users "
+                "(username TEXT PRIMARY KEY, salt BLOB, hash BLOB, created INTEGER)")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS sessions "
+                "(token_hash TEXT PRIMARY KEY, username TEXT, expires INTEGER)")
+            self._db.commit()
+
+    @staticmethod
+    def _derive(password, salt):
+        return hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1, dklen=32)
+
+    def user_count(self):
+        with self._lock:
+            return self._db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    def upsert_user(self, username, password):
+        salt = secrets.token_bytes(16)
+        derived = self._derive(password, salt)
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO users (username, salt, hash, created) VALUES (?,?,?,?)",
+                (username, salt, derived, int(time.time())))
+            self._db.commit()
+
+    def verify(self, username, password):
+        with self._lock:
+            row = self._db.execute(
+                "SELECT salt, hash FROM users WHERE username=?", (username,)).fetchone()
+        if not row:
+            # Spend comparable work so a missing user isn't a timing oracle.
+            self._derive(password, b"\x00" * 16)
+            return False
+        return hmac.compare_digest(self._derive(password, row[0]), row[1])
+
+    def create_session(self, username):
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        expires = int(time.time()) + self.session_ttl
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO sessions (token_hash, username, expires) VALUES (?,?,?)",
+                (token_hash, username, expires))
+            self._db.commit()
+        return token, expires
+
+    def principal_for_token(self, token):
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._lock:
+            row = self._db.execute(
+                "SELECT username, expires FROM sessions WHERE token_hash=?", (token_hash,)).fetchone()
+        if not row:
+            return None
+        if row[1] < int(time.time()):
+            with self._lock:
+                self._db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
+                self._db.commit()
+            return None
+        return row[0]
+
+    def revoke(self, token):
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._lock:
+            self._db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
+            self._db.commit()
+
+
 class Authenticator:
     def __init__(self, cfg):
         self.cfg = cfg
         self.oidc = OidcVerifier(cfg) if cfg.oidc_enabled else None
+        self.passwords = None
+        if cfg.password_enabled:
+            try:
+                self.passwords = PasswordStore(cfg.auth_db, cfg.session_ttl)
+                if self.passwords.user_count() == 0:
+                    pw = cfg.admin_password or secrets.token_urlsafe(12)
+                    self.passwords.upsert_user(cfg.admin_user, pw)
+                    if not cfg.admin_password:
+                        sys.stderr.write(
+                            "rebekah-gateway: seeded admin user %r with a generated "
+                            "password: %s  (save it now; shown once)\n"
+                            % (cfg.admin_user, pw))
+            except Exception as exc:  # noqa: BLE001 -- degrade, never crash
+                sys.stderr.write(
+                    "rebekah-gateway: password login unavailable (%s)\n" % exc)
+                self.passwords = None
+
+    @property
+    def password_active(self):
+        return self.passwords is not None
 
     def principal(self, authorization_header):
         """Return a principal string if the request is authorized, else None."""
@@ -225,11 +353,23 @@ class Authenticator:
             return None
         if self.cfg.token_enabled and hmac.compare_digest(credential, self.cfg.token):
             return "token:local"
+        if self.passwords is not None:
+            user = self.passwords.principal_for_token(credential)
+            if user is not None:
+                return "user:" + user
         if self.oidc is not None:
             sub = self.oidc.verify(credential)
             if sub is not None:
                 return "oidc:" + sub
         return None
+
+    def login(self, username, password):
+        """Verify credentials and mint a session; returns (token, expires) or None."""
+        if self.passwords is None or not username or not password:
+            return None
+        if not self.passwords.verify(username, password):
+            return None
+        return self.passwords.create_session(username)
 
 
 # --- proxy -------------------------------------------------------------------
@@ -298,6 +438,54 @@ def make_handler(cfg, auth):
             if self.command != "HEAD":
                 self.wfile.write(payload)
 
+        def _json(self, status, obj):
+            body = json.dumps(obj).encode()
+            self._write_head(status, [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Cache-Control", "no-store"),
+            ], len(body))
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def _serve_auth(self):
+            # Unauthenticated: which login methods the console should offer.
+            # No secret, credential, or backend list is revealed here.
+            self._json(200, {
+                "password": auth.password_active,
+                "token_auth": cfg.token_enabled,
+            })
+
+        def _serve_login(self):
+            if self.command != "POST":
+                self._fail(405, "method not allowed")
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 64 * 1024:
+                self._fail(413, "payload too large")
+                return
+            try:
+                data = json.loads(self.rfile.read(length) if length else b"{}")
+                username = str(data.get("username", ""))
+                password = str(data.get("password", ""))
+            except Exception:  # noqa: BLE001
+                self._fail(400, "invalid json")
+                return
+            result = auth.login(username, password)
+            if result is None:
+                self._fail(401, "invalid credentials")
+                return
+            token, expires = result
+            self._json(200, {"token": token, "user": username, "expires": expires})
+
+        def _serve_logout(self):
+            if self.command != "POST":
+                self._fail(405, "method not allowed")
+                return
+            scheme, _, cred = self.headers.get("Authorization", "").partition(" ")
+            if scheme.lower() == "bearer" and cred.strip() and auth.passwords is not None:
+                auth.passwords.revoke(cred.strip())
+            self._fail(200, "ok")
+
         def _serve_info(self):
             principal = auth.principal(self.headers.get("Authorization"))
             if principal is None:
@@ -309,6 +497,8 @@ def make_handler(cfg, auth):
             schemes = []
             if cfg.token_enabled:
                 schemes.append("token")
+            if auth.password_active:
+                schemes.append("password")
             if cfg.oidc_enabled:
                 schemes.append("oidc")
             body = json.dumps({
@@ -342,6 +532,15 @@ def make_handler(cfg, auth):
                     self._serve_ui(raw_path[len("/ui/"):])
                     return
 
+            if raw_path in ("/api/auth", "/api/auth/"):
+                self._serve_auth()
+                return
+            if raw_path in ("/api/login", "/api/login/"):
+                self._serve_login()
+                return
+            if raw_path in ("/api/logout", "/api/logout/"):
+                self._serve_logout()
+                return
             if raw_path in ("/api/info", "/api/info/"):
                 self._serve_info()
                 return
@@ -444,6 +643,8 @@ def main(argv=None):
     schemes = []
     if cfg.token_enabled:
         schemes.append("token")
+    if auth.password_active:
+        schemes.append("password")
     if cfg.oidc_enabled:
         schemes.append("oidc")
     scheme = "https" if cfg.tls_enabled else "http"

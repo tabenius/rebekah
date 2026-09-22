@@ -246,16 +246,21 @@ serve() {
     "$state_dir/sylvae/runs" \
     "$state_dir/sylvae/skills" \
     "$state_dir/weftmark" \
-    "$state_dir/ephor"
+    "$state_dir/ephor" \
+    "$state_dir/gateway"
   # chmod before chown: while root still owns these dirs the mode change needs
   # no CAP_FOWNER, so the container can run without it. chown -R preserves the
   # mode.
   chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor}
+  # The gateway state holds the SQLite auth DB (password hashes + sessions):
+  # tighter than the others (0700), readable only by the gateway UID.
+  chmod 0700 "$state_dir/gateway"
   chown -R 10001:10001 "$state_dir/ollama"
   chown -R 10002:10002 "$state_dir/opencode"
   chown -R 10003:10003 "$state_dir/sylvae"
   chown -R 10004:10004 "$state_dir/weftmark"
   chown -R 10006:10006 "$state_dir/ephor"
+  chown -R 10005:10005 "$state_dir/gateway"
   # Seed an offline-safe OpenCode configuration once. Defining Ollama here
   # does not disable online providers; credentials added later remain available.
   # An operator-created config always wins and is never overwritten.

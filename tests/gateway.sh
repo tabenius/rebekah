@@ -13,6 +13,11 @@ python="${PYTHON:-python3}"
 work="$(mktemp -d)"
 pids=()
 
+# Each case sets the auth scheme it exercises explicitly; default the SQLite
+# login OFF here so token/OIDC cases behave as before and nothing touches the
+# real /var/lib state dir. The dedicated password section turns it back on.
+export REBEKAH_AUTH_PASSWORD=0
+
 cleanup() {
   for pid in "${pids[@]:-}"; do kill "$pid" >/dev/null 2>&1 || true; done
   rm -rf -- "$work"
@@ -78,7 +83,8 @@ grep -q 'without TLS' "$work/e1" && pass "refuses non-loopback bind without TLS"
   || fail "wrong error for non-loopback/no-TLS: $(cat "$work/e1")"
 
 # No auth configured at all must refuse to start.
-if REBEKAH_GATEWAY_EXPOSE=weftmark "$python" "$gateway" >/dev/null 2>"$work/e2"; then
+# Disable the default SQLite login too, so no auth scheme remains.
+if REBEKAH_GATEWAY_EXPOSE=weftmark REBEKAH_AUTH_PASSWORD=0 "$python" "$gateway" >/dev/null 2>"$work/e2"; then
   fail "gateway started with no auth configured (should refuse)"
 fi
 grep -q 'no auth configured' "$work/e2" && pass "refuses to run as an open proxy" \
@@ -144,6 +150,12 @@ base="http://127.0.0.1:$gw_port"
 ui_body="$(body "$base/ui/")"
 printf '%s' "$ui_body" | grep -q "Rebekah Console" \
   && pass "/ui/ serves the console HTML" || fail "/ui/ missing console markup"
+printf '%s' "$ui_body" | grep -q 'role="tabpanel"' \
+  && pass "console exposes accessible tab panels" || fail "console missing tabpanel semantics"
+printf '%s' "$ui_body" | grep -q '>Advanced<' \
+  && pass "raw API tools are under Advanced" || fail "console missing Advanced navigation"
+printf '%s' "$ui_body" | grep -q 'optional governance integration' \
+  && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
   && pass "console served as text/html" || fail "console content-type wrong"
 
@@ -177,6 +189,43 @@ if printf '%s' "$def_info" | grep -q '"ephor"'; then
 else
   pass "Ephor API remains opt-in"
 fi
+
+# === 2d. SQLite username/password login ====================================
+printf '\n== SQLite password login ==\n'
+pw_port="$(free_port)"
+REBEKAH_GATEWAY_PORT="$pw_port" REBEKAH_AUTH_PASSWORD=1 REBEKAH_AUTH_DB="$work/auth.db" \
+  REBEKAH_ADMIN_USER=admin REBEKAH_ADMIN_PASSWORD="s3kritpw" \
+  REBEKAH_GATEWAY_EXPOSE=weftmark WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$up_port" \
+  REBEKAH_GATEWAY_UI_DIR="$repo_root/nix/ui" \
+  "$python" "$gateway" >"$work/gwpw.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$pw_port/healthz" || fail "password gateway did not start"
+pbase="http://127.0.0.1:$pw_port"
+
+# The gateway starts with password login as its ONLY auth scheme (no token).
+pa="$(body "$pbase/api/auth")"
+printf '%s' "$pa" | grep -qE '"password": *true' \
+  && pass "/api/auth advertises password login" || fail "no password advert: $pa"
+
+# Wrong password is rejected.
+[ "$(code -H 'Content-Type: application/json' -X POST \
+     --data '{"username":"admin","password":"nope"}' "$pbase/api/login")" = 401 ] \
+  && pass "bad password -> 401" || fail "bad password not 401"
+
+# Correct password mints a session token that authenticates the API.
+lt="$(body -H 'Content-Type: application/json' -X POST \
+      --data '{"username":"admin","password":"s3kritpw"}' "$pbase/api/login")"
+sess="$(printf '%s' "$lt" | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')"
+[ -n "$sess" ] && pass "login returns a session token" || fail "no session token: $lt"
+[ "$(code -H "Authorization: Bearer $sess" "$pbase/api/info")" = 200 ] \
+  && pass "session token authenticates /api/info" || fail "session token rejected"
+[ "$(code "$pbase/api/info")" = 401 ] \
+  && pass "no session -> 401 (never open)" || fail "open without a session"
+
+# Logout revokes the session.
+code -X POST -H "Authorization: Bearer $sess" "$pbase/api/logout" >/dev/null
+[ "$(code -H "Authorization: Bearer $sess" "$pbase/api/info")" = 401 ] \
+  && pass "logout revokes the session" || fail "session still valid after logout"
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'
