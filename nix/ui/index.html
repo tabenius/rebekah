@@ -267,7 +267,9 @@
     $("passwordFields").classList.toggle("hidden", !pw);
     $("tokenFields").classList.toggle("hidden", !(authCfg && authCfg.token_auth));
     if (!pw && !(authCfg && authCfg.token_auth)) {
-      showErr("This gateway does not advertise an interactive sign-in method.");
+      const message = "This gateway does not advertise an interactive sign-in method.";
+      showErr(message);
+      showAuthErr(message + " Ask an administrator to enable local login or token authentication.");
     }
   }
 
