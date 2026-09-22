@@ -16,7 +16,7 @@ python3Packages.buildPythonApplication {
 import os" \
       --replace-fail 'model: str = "ollama/qwen2.5:14b"' 'model: str | None = None' \
       --replace-fail 'api_base: str = "http://localhost:11434"' 'api_base: str | None = None' \
-      --replace-fail 'self.model = model' 'self.model = model or os.environ.get("SYLVAE_OLLAMA_MODEL", "qwen2.5:0.5b")' \
+      --replace-fail 'self.model = model' 'self.model = model or os.environ.get("SYLVAE_OLLAMA_MODEL", "ollama/qwen2.5:14b")' \
       --replace-fail 'self.api_base = api_base' 'self.api_base = api_base or os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")'
   '';
 
