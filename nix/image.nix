@@ -28,6 +28,7 @@ dockerTools.buildLayeredImage {
       var/lib/rebekah/sylvae/skills \
       var/lib/rebekah/weftmark \
       var/lib/rebekah/ephor \
+      var/lib/rebekah/gateway \
       workspace
 
     # Each service gets its own primary group (gid == uid) so a 0750 state
@@ -110,6 +111,12 @@ dockerTools.buildLayeredImage {
       "REBEKAH_GATEWAY_EXPOSE=weftmark opencode ollama"
       "REBEKAH_GATEWAY_UI=1"
       "REBEKAH_GATEWAY_UI_DIR=/usr/local/share/rebekah/ui"
+      # Default browser login: SQLite username/password. On first boot the
+      # gateway seeds an admin user; provide REBEKAH_ADMIN_PASSWORD or a random
+      # one is generated and logged once. DB lives on the persistent state dir.
+      "REBEKAH_AUTH_PASSWORD=1"
+      "REBEKAH_AUTH_DB=/var/lib/rebekah/gateway/auth.db"
+      "REBEKAH_ADMIN_USER=admin"
     ];
     ExposedPorts = { "8080/tcp" = { }; };
     WorkingDir = "/workspace";

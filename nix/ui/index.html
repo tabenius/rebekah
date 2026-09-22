@@ -107,8 +107,11 @@
   <span class="grow"></span>
   <div class="authbar" id="authbar">
     <span class="status" id="conn"><span class="dot" id="dot"></span><span id="connText">not connected</span></span>
+    <input type="text" id="user" class="hidden" placeholder="Username" autocomplete="username" spellcheck="false">
+    <input type="password" id="pass" class="hidden" placeholder="Password" autocomplete="current-password">
+    <button id="login" class="hidden">Log in</button>
     <input type="password" id="token" placeholder="Bearer token" autocomplete="off" spellcheck="false">
-    <button id="connect">Connect</button>
+    <button id="connect" class="ghost">Use token</button>
     <button id="signout" class="ghost hidden">Sign out</button>
   </div>
 </header>
@@ -182,7 +185,7 @@
   const LANES = ["backlog", "active", "review", "ready", "done"];
   let token = "";
   try { token = sessionStorage.getItem(TKEY) || ""; } catch (e) {}
-  let info = null, boardTimer = null;
+  let info = null, boardTimer = null, authCfg = null;
 
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => {
@@ -214,9 +217,41 @@
     $("connText").textContent = ok
       ? (DEMO ? "demo" : "connected · " + (info.auth || []).join("+") + " · " + (info.expose || []).join(", "))
       : "not connected";
+    const pw = !!(authCfg && authCfg.password);
     $("signout").classList.toggle("hidden", !ok || DEMO);
     $("token").classList.toggle("hidden", ok);
     $("connect").classList.toggle("hidden", ok);
+    $("user").classList.toggle("hidden", ok || !pw);
+    $("pass").classList.toggle("hidden", ok || !pw);
+    $("login").classList.toggle("hidden", ok || !pw);
+  }
+
+  async function loadAuthConfig() {
+    const r = await api("/api/auth");
+    authCfg = (r.ok && r.data) ? r.data : null;
+    const pw = !!(authCfg && authCfg.password);
+    $("user").classList.toggle("hidden", pw ? false : true);
+    $("pass").classList.toggle("hidden", pw ? false : true);
+    $("login").classList.toggle("hidden", pw ? false : true);
+  }
+
+  async function login() {
+    showErr("");
+    const username = $("user").value.trim();
+    const password = $("pass").value;
+    if (!username || !password) { showErr("Enter a username and password."); return; }
+    const r = await api("/api/login", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!r.ok || !r.data || !r.data.token) {
+      showErr(r.status === 401 ? "Invalid username or password." : "Login failed (" + r.status + ").");
+      return;
+    }
+    token = r.data.token;
+    try { sessionStorage.setItem(TKEY, token); } catch (e) {}
+    $("pass").value = "";
+    connect();
   }
 
   async function connect() {
@@ -462,20 +497,30 @@
   });
 
   $("connect").addEventListener("click", connect);
+  $("login").addEventListener("click", login);
   $("signout").addEventListener("click", signout);
   $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+  $("user").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+  $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("cSend").addEventListener("click", consoleSend);
   $("ocRefresh").addEventListener("click", loadOpencode);
   $("olRefresh").addEventListener("click", loadOllama);
   $("olPull").addEventListener("click", ollamaPull);
   $("olName").addEventListener("keydown", (e) => { if (e.key === "Enter") ollamaPull(); });
 
-  // Boot: demo connects immediately; a stored token auto-connects.
-  if (DEMO) { connect(); }
+  // Boot: discover which login methods to show (so the form appears even if a
+  // stored token has expired); demo connects immediately; a stored token
+  // auto-connects.
+  loadAuthConfig();
+  if (DEMO) { $("user").value = "admin"; $("pass").value = "ragbaz"; }
   else if (token) { connect(); }
 
   // --- Demo data -----------------------------------------------------------
   function demo(path) {
+    if (path === "/api/auth")
+      return Promise.resolve({ status: 200, ok: true, data: { password: true, token_auth: false } });
+    if (path === "/api/login")
+      return Promise.resolve({ status: 200, ok: true, data: { token: "demo-session", user: "admin", expires: 0 } });
     if (path === "/api/info")
       return Promise.resolve({ status: 200, ok: true, data: {
         service: "rebekah-gateway", expose: ["weftmark", "opencode", "ollama"],

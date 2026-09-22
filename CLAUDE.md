@@ -64,13 +64,14 @@ distinct UID/GID and no ambient privileges. All ports are loopback-only.
 | opencode | 10002:10002   | 4096   | `/var/lib/rebekah/opencode` | `/global/health` |
 | sylvae   | 10003:10003   | 8971   | `/var/lib/rebekah/sylvae`   | `/` |
 | weftmark | 10004:10004   | 8765   | `/var/lib/rebekah/weftmark` | `/healthz` |
-| gateway  | 10005:10005   | 8080   | (none)                      | `/healthz` |
+| gateway  | 10005:10005   | 8080   | `/var/lib/rebekah/gateway` (`0700`) | `/healthz` |
 
 The four core services bind loopback only. The **gateway** is the exception by
 design: it is the one process meant to face the LAN / a GUI / a HITL guest, and
 it authenticates every request before forwarding an allow-listed route to a
 loopback backend. It still binds loopback by *default*; operators expose it with
-`REBEKAH_GATEWAY_HOST` + TLS. It needs no state directory and no extra Linux
+`REBEKAH_GATEWAY_HOST` + TLS. Its `0700` state directory holds the SQLite auth DB
+(password hashes + sessions), readable only by UID 10005. It needs no extra Linux
 capability (it binds a port ≥1024).
 
 WeftMark operates on the Git repo mounted at `/workspace` (requires a valid
@@ -111,10 +112,16 @@ them in any change:
 6. **Secrets never enter the image or Nix store** — inject at runtime only.
 7. **Authenticated, fail-closed API gateway** (`nix/gateway.py`,
    `rebekah-gateway`, UID 10005): the only process allowed to face the network.
-   - Two auth schemes, either sufficient: a static bearer **token** (internal /
-     LAN / CI; constant-time compared) and **OIDC** JWT bearer verified against
-     the issuer's JWKS (external / SSO / HITL). PyJWT is imported lazily so the
-     token path is stdlib-only.
+   - Three auth schemes, any sufficient: a **SQLite username/password** login
+     (the default browser sign-in — `scrypt` hashes + opaque bearer sessions in
+     the `0700` state dir; seeds a default `admin`, password provided via
+     `REBEKAH_ADMIN_PASSWORD` or generated + logged once); a static bearer
+     **token** (internal / LAN / CI; constant-time compared); and **OIDC** JWT
+     bearer verified against the issuer's JWKS (external / SSO / HITL). sqlite3 +
+     scrypt are stdlib and PyJWT is imported lazily, so the token/password paths
+     are stdlib-only. `/api/login` mints a session; `/api/logout` revokes it;
+     `/api/auth` (unauthenticated) advertises which methods to offer, revealing
+     no secret. Only session-token *hashes* are stored.
    - Fails closed: refuses to start when bound beyond loopback without TLS, when
      no auth scheme is configured (never an open proxy), or with no exposed
      backend; an unexposed/unknown route is `404`, an unauthenticated request is
