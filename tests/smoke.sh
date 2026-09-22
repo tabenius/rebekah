@@ -39,6 +39,7 @@ chmod -R a+rwX "$fixture"
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   -v "$fixture:/workspace" \
   -e REBEKAH_CHANGE_SET_ID=smoke-change-set \
+  -e REBEKAH_ADMIN_PASSWORD=smoke-admin-pw \
   "$image" >/dev/null
 
 for _ in $(seq 1 90); do
@@ -140,7 +141,37 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
-    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, and web console are healthy\n'
+    # SQLite login: the seeded admin (password injected above) can log in, and the
+    # minted session token authenticates the API. Wrong password is refused.
+    gw_badlogin="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Content-Type: application/json' \
+      -X POST --data '{"username":"admin","password":"wrong"}' http://127.0.0.1:8080/api/login)"
+    if [[ "$gw_badlogin" != 401 ]]; then
+      printf 'failed: gateway accepted a bad password (got %s)\n' "$gw_badlogin" >&2
+      exit 1
+    fi
+    gw_sess="$("$runtime" exec "$name" \
+      curl -s --max-time 5 -H 'Content-Type: application/json' \
+      -X POST --data '{"username":"admin","password":"smoke-admin-pw"}' http://127.0.0.1:8080/api/login \
+      | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')"
+    if [[ -z "$gw_sess" ]]; then
+      printf 'failed: SQLite login did not return a session token\n' >&2
+      exit 1
+    fi
+    gw_sess_info="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+      -H "Authorization: Bearer $gw_sess" http://127.0.0.1:8080/api/info)"
+    if [[ "$gw_sess_info" != 200 ]]; then
+      printf 'failed: SQLite session token did not authenticate (got %s)\n' "$gw_sess_info" >&2
+      exit 1
+    fi
+    # The auth DB must be readable only by the gateway UID (10005), not others.
+    if "$runtime" exec --user 10002:10002 "$name" cat /var/lib/rebekah/gateway/auth.db >/dev/null 2>&1; then
+      printf 'failed: gateway auth DB is readable by another service UID\n' >&2
+      exit 1
+    fi
+
+    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, SQLite login, and web console are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then
