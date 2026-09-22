@@ -88,7 +88,7 @@ class Config:
         # Which backends are reachable through the gateway. WeftMark (the
         # coordination / evidence / review board -- the "kanban" surface) is the
         # safe default; OpenCode drives agents so it is opt-in.
-        exposed = env.get("REBEKAH_GATEWAY_EXPOSE", "weftmark").split()
+        exposed = env.get("REBEKAH_GATEWAY_EXPOSE", "weftmark opencode ollama").split()
 
         oc_host = env.get("OPENCODE_HOST", "127.0.0.1").strip() or "127.0.0.1"
         oc_port = int(env.get("OPENCODE_PORT", "4096"))

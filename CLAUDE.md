@@ -120,8 +120,9 @@ them in any change:
      backend; an unexposed/unknown route is `404`, an unauthenticated request is
      `401`, an upstream error is `502` — backend details are never leaked.
    - Only allow-listed backends are reachable (`REBEKAH_GATEWAY_EXPOSE`, default
-     `weftmark`); the gateway re-authenticates to OpenCode itself and never
-     forwards the client's `Authorization` to a backend.
+     `weftmark opencode ollama`; `sylvae` opt-in); the gateway re-authenticates
+     to OpenCode itself and never forwards the client's `Authorization` to a
+     backend.
    - The per-boot token is persisted root-only (`0600`,
      `/run/rebekah/gateway-token`) and passed to the gateway via env, never
      argv. Guarded by `tests/gateway.sh` and `tests/smoke.sh`. No extra
