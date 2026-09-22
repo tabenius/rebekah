@@ -185,27 +185,31 @@ wait_url "http://127.0.0.1:$gw2_port/healthz" || fail "size-cap gateway did not 
 printf '\n== web console + /api/info ==\n'
 base="http://127.0.0.1:$gw_port"
 [ "$(code "$base/")" = 200 ] && pass "/ serves the console (200)" || fail "/ not 200"
-ui_body="$(body "$base/ui/")"
-printf '%s' "$ui_body" | grep -q "Rebekah Console" \
+# Grep the served page from a file, not `printf ... | grep -q`: under
+# `set -o pipefail`, grep -q short-circuits at the first match and closes the
+# pipe, so printf takes SIGPIPE and fails the whole pipeline once the body
+# outgrows what fits before grep exits. A file has no upstream pipe.
+ui_file="$work/ui.html"
+body "$base/ui/" > "$ui_file"
+has() { grep -q "$1" "$ui_file"; }
+has "Rebekah Console" \
   && pass "/ui/ serves the console HTML" || fail "/ui/ missing console markup"
-printf '%s' "$ui_body" | grep -q 'role="tabpanel"' \
+has 'role="tabpanel"' \
   && pass "console exposes accessible tab panels" || fail "console missing tabpanel semantics"
-printf '%s' "$ui_body" | grep -q '>Advanced<' \
+has '>Advanced<' \
   && pass "raw API tools are under Advanced" || fail "console missing Advanced navigation"
-printf '%s' "$ui_body" | grep -q 'id="panel-attention"' \
+has 'id="panel-attention"' \
   && pass "console leads with an attention inbox" || fail "console missing attention panel"
-printf '%s' "$ui_body" | grep -q '/api/v1/attention' \
+has '/api/v1/attention' \
   && pass "console consumes the versioned attention API" || fail "console does not call /api/v1/attention"
-printf '%s' "$ui_body" | grep -q '/api/v1/system' \
+has '/api/v1/system' \
   && pass "System panel consumes the versioned system API" || fail "console does not call /api/v1/system"
-if printf '%s' "$ui_body" | grep -q 'Needs attention' \
-   && printf '%s' "$ui_body" | grep -q 'Installing' \
-   && printf '%s' "$ui_body" | grep -q 'Offline'; then
+if has 'Needs attention' && has 'Installing' && has 'Offline'; then
   pass "service health renders four states with remedies"
 else
   fail "console missing four-state service health"
 fi
-printf '%s' "$ui_body" | grep -q 'optional governance integration' \
+has 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
   && pass "console served as text/html" || fail "console content-type wrong"
