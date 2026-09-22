@@ -274,8 +274,8 @@ serve() {
         }
       }
     }' > "$opencode_config"
-    chown -R 10002:10002 "$state_dir/opencode/config"
     chmod 0600 "$opencode_config"
+    chown -R 10002:10002 "$state_dir/opencode/config"
   fi
 
   doctor
