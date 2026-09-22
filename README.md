@@ -261,9 +261,17 @@ weftmark-owned ledger) — so the example drops everything else Docker grants ro
 by default and adds `no-new-privileges`. The container's smoke test runs under
 exactly this set.
 
-The image ships **no model weights** — Ollama starts with an empty model store.
-Pull a model into the persistent state volume before requesting inference; it is
-retained across runs on the `rebekah-state` volume:
+The image ships **no model weights**, but it does ship a consistent local-model
+contract. `REBEKAH_OLLAMA_MODEL` defaults to `qwen2.5:0.5b`; on first boot
+Rebekah writes an OpenCode configuration that uses that model through the local
+Ollama API, and Sylvae receives the same default. Existing OpenCode configuration
+is never overwritten, and online providers remain available when their runtime
+credentials are supplied.
+
+Pull the model into the persistent state volume before requesting inference; it
+is retained across runs. v-BAZ does this automatically: it uses the ESP-cached
+model off-grid, or pulls the configured model when connectivity is available.
+For a standalone Rebekah container:
 
 ```bash
 docker exec <container-name> ollama pull llama3.2
