@@ -8,6 +8,7 @@ opencode_password_file="$run_dir/opencode-password"
 gateway_token_file="$run_dir/gateway-token"
 
 ollama_host="${OLLAMA_HOST:-127.0.0.1:11434}"
+default_model="${REBEKAH_OLLAMA_MODEL:-qwen2.5:0.5b}"
 opencode_host="${OPENCODE_HOST:-127.0.0.1}"
 opencode_port="${OPENCODE_PORT:-4096}"
 sylvae_host="${SYLVAE_HOST:-127.0.0.1}"
@@ -255,6 +256,28 @@ serve() {
   chown -R 10003:10003 "$state_dir/sylvae"
   chown -R 10004:10004 "$state_dir/weftmark"
   chown -R 10006:10006 "$state_dir/ephor"
+  # Seed an offline-safe OpenCode configuration once. Defining Ollama here
+  # does not disable online providers; credentials added later remain available.
+  # An operator-created config always wins and is never overwritten.
+  local opencode_config="$state_dir/opencode/config/opencode/opencode.json"
+  if [[ ! -s "$opencode_config" ]]; then
+    mkdir -p "$(dirname "$opencode_config")"
+    jq -n --arg model "$default_model" '{
+      model: ("ollama/" + $model),
+      small_model: ("ollama/" + $model),
+      provider: {
+        ollama: {
+          npm: "@ai-sdk/openai-compatible",
+          name: "Ollama (local, managed by Rebekah)",
+          options: {baseURL: "http://127.0.0.1:11434/v1"},
+          models: {($model): {name: ($model + " (local)")}}
+        }
+      }
+    }' > "$opencode_config"
+    chown -R 10002:10002 "$state_dir/opencode/config"
+    chmod 0600 "$opencode_config"
+  fi
+
   doctor
   seed_ledger
   trap stop_services TERM INT
@@ -279,7 +302,9 @@ serve() {
     run_as 10002 "$state_dir/opencode" \
       opencode serve --hostname "$opencode_host" --port "$opencode_port"
 
-  run_as 10003 "$state_dir/sylvae" \
+  SYLVAE_OLLAMA_MODEL="$default_model" \
+    OLLAMA_API_BASE="http://127.0.0.1:11434" \
+    run_as 10003 "$state_dir/sylvae" \
     sylvae review \
       --runs-dir "$state_dir/sylvae/runs" \
       --skills-dir "$state_dir/sylvae/skills" \
