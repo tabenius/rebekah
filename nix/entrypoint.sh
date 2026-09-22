@@ -14,6 +14,9 @@ sylvae_host="${SYLVAE_HOST:-127.0.0.1}"
 sylvae_port="${SYLVAE_PORT:-8971}"
 weftmark_host="${WEFTMARK_HOST:-127.0.0.1}"
 weftmark_port="${WEFTMARK_PORT:-8765}"
+ephor_host="${EPHOR_HOST:-127.0.0.1}"
+ephor_port="${EPHOR_PORT:-9800}"
+ephor_enable="${REBEKAH_EPHOR_ENABLE:-1}"
 
 # The gateway is the single authenticated entry point for Rebekah's API
 # (invariant #2's "authenticated TLS proxy"). It binds loopback by default;
@@ -51,6 +54,13 @@ doctor() {
     printf 'ok      binary/weftmark-http\n'
   else
     printf 'failed  binary/weftmark-http missing\n' >&2
+    failed=1
+  fi
+
+  if command -v governance-http >/dev/null 2>&1; then
+    printf 'ok      binary/governance-http\n'
+  else
+    printf 'failed  binary/governance-http missing\n' >&2
     failed=1
   fi
 
@@ -140,6 +150,9 @@ health() {
     "${oc_auth[@]}" || failed=1
   check_url sylvae "http://$sylvae_host:$sylvae_port/" || failed=1
   check_url weftmark "http://$weftmark_host:$weftmark_port/healthz" || failed=1
+  if [[ "$ephor_enable" != 0 ]]; then
+    check_url ephor "http://$ephor_host:$ephor_port/health" || failed=1
+  fi
   if [[ "$gateway_enable" != 0 ]]; then
     # The gateway always listens on loopback too; check it there. When TLS is
     # configured the listener speaks HTTPS, so probe https and skip cert
@@ -231,15 +244,17 @@ serve() {
     "$state_dir/opencode" \
     "$state_dir/sylvae/runs" \
     "$state_dir/sylvae/skills" \
-    "$state_dir/weftmark"
+    "$state_dir/weftmark" \
+    "$state_dir/ephor"
   # chmod before chown: while root still owns these dirs the mode change needs
   # no CAP_FOWNER, so the container can run without it. chown -R preserves the
   # mode.
-  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark}
+  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor}
   chown -R 10001:10001 "$state_dir/ollama"
   chown -R 10002:10002 "$state_dir/opencode"
   chown -R 10003:10003 "$state_dir/sylvae"
   chown -R 10004:10004 "$state_dir/weftmark"
+  chown -R 10006:10006 "$state_dir/ephor"
   doctor
   seed_ledger
   trap stop_services TERM INT
@@ -275,6 +290,15 @@ serve() {
       --repo "$workspace" \
       --ledger "$state_dir/weftmark/ledger.jsonl" \
       --host "$weftmark_host" --port "$weftmark_port"
+
+  # KAGP's local governance bridge is supervised in-container by default. Set
+  # REBEKAH_EPHOR_ENABLE=0 and EPHOR_URL to use an external deployment instead.
+  if [[ "$ephor_enable" != 0 ]]; then
+    run_as 10006 "$state_dir/ephor" \
+      governance-http \
+        --listen "$ephor_host:$ephor_port" \
+        --node-id "${EPHOR_NODE_ID:-rebekah}"
+  fi
 
   # The authenticated API gateway. It fronts the loopback backends with a single
   # authenticated entry (token and/or OIDC) and is the only service meant to face
