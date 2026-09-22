@@ -31,7 +31,7 @@ chmod -R a+rwX "$fixture"
 # test this way guards the minimal set against regressions.
 "$runtime" run -d \
   --name "$name" \
-   --read-only \
+  --read-only \
   --cap-drop=ALL \
   --cap-add=CHOWN --cap-add=DAC_OVERRIDE \
   --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
