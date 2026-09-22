@@ -172,6 +172,11 @@ if printf '%s' "$def_info" | grep -q '"opencode"' && printf '%s' "$def_info" | g
 else
   fail "default expose missing opencode/ollama: $def_info"
 fi
+if printf '%s' "$def_info" | grep -q '"ephor"'; then
+  fail "default expose unexpectedly includes sensitive Ephor API: $def_info"
+else
+  pass "Ephor API remains opt-in"
+fi
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'
