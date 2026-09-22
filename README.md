@@ -71,7 +71,7 @@ flowchart TB
     G -.->|allow-listed routes| W
 ```
 
-The four core services bind **loopback only**. Reaching them from outside the
+The five core services bind **loopback only**. Reaching them from outside the
 container goes through the **[API gateway](#api-gateway)** — the one process that
 authenticates every request and forwards only allow-listed routes to a loopback
 backend. Secrets must be injected at runtime; they must not enter the image or
@@ -134,7 +134,8 @@ only and path-traversal-safe, under a strict `Content-Security-Policy`
 
 Only **allow-listed** backends are reachable. `REBEKAH_GATEWAY_EXPOSE` defaults
 to `weftmark opencode ollama`, so the console's board, OpenCode and Ollama
-panels all work out of the box; `sylvae` stays opt-in. Note that exposing
+panels all work out of the box; `sylvae` and the governance-sensitive `ephor`
+API stay opt-in. Note that exposing
 `opencode` means the gateway credential can drive agents — narrow the list (e.g.
 `REBEKAH_GATEWAY_EXPOSE=weftmark`) if that isn't wanted. Each backend is reached
 under its own prefix (`/weftmark/…`, `/opencode/…`); the gateway strips the
@@ -248,7 +249,7 @@ docker run --rm \
   rebekah:latest
 ```
 
-The entrypoint initializes volume ownership for the four isolated service UIDs.
+The entrypoint initializes volume ownership for the five isolated service UIDs.
 The mounted workspace is the only Git safe-directory exception configured by
 the runtime.
 
@@ -277,14 +278,20 @@ docker exec <container-name> rebekah-health
 
 ## Ephor/KAGP governance
 
-Configure the local Rust `governance-http` bridge and evaluate a Change Set:
+Rebekah packages and supervises KAGP's Rust `governance-http` bridge on loopback
+by default. Evaluate a Change Set against that in-container service:
 
 ```bash
-export EPHOR_URL=http://127.0.0.1:9800
+# EPHOR_URL already defaults to http://127.0.0.1:9800 in the image
 export REBEKAH_CHANGE_SET_ID=cs-example
 export REBEKAH_SYLVAE_RUN_ID=run-example
 rebekah-ephor evaluate
 ```
+
+To use an external KAGP deployment instead, set `REBEKAH_EPHOR_ENABLE=0` and
+provide `EPHOR_URL`; the supervisor then skips the internal bridge and its health
+probe. Add `ephor` to `REBEKAH_GATEWAY_EXPOSE` only when authenticated remote
+access to the governance API is intentionally required.
 
 For the Cloudflare Worker API, also set `EPHOR_API_STYLE=worker`. An optional
 `EPHOR_AUTH_TOKEN` is sent as a bearer token. Successful evaluations produce
@@ -304,7 +311,7 @@ bash tests/smoke.sh
 
 The test creates a disposable Git repository, starts the container with a
 read-only root filesystem, and requires successful health responses from all
-four services.
+five services, including a real Ephor capture/finalize governance cycle.
 
 ## Repository layout
 
@@ -316,7 +323,7 @@ four services.
   shutdown.
 - `nix/gateway.py` is the authenticated API gateway (`rebekah-gateway`).
 - `nix/ui/` is the gateway's built-in web console (static, served same-origin).
-- `nix/packages/` packages WeftMark and Sylvae from their pinned sources.
+- `nix/packages/` packages WeftMark, Sylvae, and Ephor/KAGP from pinned sources.
 - `tests/smoke.sh` verifies the loaded image through Docker.
 - `tests/gateway.sh` (+ `tests/gateway-oidc.py`) unit-tests the gateway's auth,
   routing, and fail-closed guards.
@@ -329,8 +336,9 @@ four services.
 ## Current status
 
 **Core runtime complete.** The reproducible image packages and supervises
-OpenCode, Ollama, Sylvae, and WeftMark. The image also provides `rebekah-ephor`,
-which calls KAGP's capture/finalize boundary and emits normalized typed evidence.
+OpenCode, Ollama, Sylvae, WeftMark, and KAGP's Ephor governance bridge. The image
+also provides `rebekah-ephor`, which calls the bridge's capture/finalize boundary
+and emits normalized typed evidence.
 CI validates approval plus fail-closed denial, hold, malformed-response,
 unavailable-service, and missing-configuration paths.
 
