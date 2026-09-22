@@ -59,6 +59,59 @@ PY
   pids+=("$!")
 }
 
+# Mock WeftMark: serves a kanban projection so we can assert the gateway's
+# /api/v1/attention aggregation. /healthz lets wait_url probe it.
+start_kanban() {
+  local port="$1"
+  "$python" - "$port" <<'PY' &
+import json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+port = int(sys.argv[1])
+KANBAN = {
+    "schema": "weftmark.kanban-projection.v0",
+    "task_change_set_links": [
+        {"task_id": "t-9", "change_set_id": "cs-1",
+         "claim_id": "claim-1", "binding_state": "in_progress"},
+    ],
+    "cards": [
+        {"kind": "change_set", "id": "cs-1", "title": "Add gateway",
+         "lane": "review", "lifecycle_state": "review", "readiness": "unreviewed",
+         "git": {"branch": "weft/gateway", "head_sha": "91f8e8b09892a210",
+                 "observed_at": "2026-08-19T12:58:00+00:00",
+                 "dirty_paths": ["nix/gateway.py"]},
+         "claims": {"active_ids": ["claim-1"]}, "scope_collisions": [],
+         "evidence": {"total": 3, "current": 2, "obsolete": 0, "failed": 0, "unavailable": 1},
+         "review": {"id": "review-1", "outcome": "unreviewed", "is_current": True},
+         "handoff": None, "attention": ["dirty_worktree"]},
+        {"kind": "change_set", "id": "cs-2", "title": "Quiet one",
+         "lane": "active", "lifecycle_state": "active", "readiness": "ready",
+         "git": {"branch": "weft/quiet", "head_sha": "abc", "dirty_paths": []},
+         "claims": {"active_ids": []}, "scope_collisions": [],
+         "evidence": {"total": 1, "current": 1}, "review": None, "handoff": None,
+         "attention": []},
+    ],
+    "plan_cards": [
+        {"kind": "task", "id": "t-9", "title": "Wire API", "lane": "backlog",
+         "task_state": "todo", "change_set_ids": ["cs-1"], "attention": ["blocked"]},
+    ],
+}
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        if self.path.split("?", 1)[0] == "/v0/kanban":
+            body = json.dumps(KANBAN).encode()
+        else:
+            body = b"UPSTREAM path=%s" % self.path.encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+  pids+=("$!")
+}
+
 wait_url() {
   local url="$1" _
   for _ in $(seq 1 50); do
@@ -147,14 +200,50 @@ wait_url "http://127.0.0.1:$gw2_port/healthz" || fail "size-cap gateway did not 
 printf '\n== web console + /api/info ==\n'
 base="http://127.0.0.1:$gw_port"
 [ "$(code "$base/")" = 200 ] && pass "/ serves the console (200)" || fail "/ not 200"
-ui_body="$(body "$base/ui/")"
-printf '%s' "$ui_body" | grep -q "Rebekah Console" \
+# Grep the served page from a file, not `printf ... | grep -q`: under
+# `set -o pipefail`, grep -q short-circuits at the first match and closes the
+# pipe, so printf takes SIGPIPE and fails the whole pipeline once the body
+# outgrows what fits before grep exits. A file has no upstream pipe.
+ui_file="$work/ui.html"
+body "$base/ui/" > "$ui_file"
+has() { grep -q "$1" "$ui_file"; }
+has "Rebekah Console" \
   && pass "/ui/ serves the console HTML" || fail "/ui/ missing console markup"
-printf '%s' "$ui_body" | grep -q 'role="tabpanel"' \
+has 'role="tabpanel"' \
   && pass "console exposes accessible tab panels" || fail "console missing tabpanel semantics"
-printf '%s' "$ui_body" | grep -q '>Advanced<' \
+has '>Advanced<' \
   && pass "raw API tools are under Advanced" || fail "console missing Advanced navigation"
-printf '%s' "$ui_body" | grep -q 'optional governance integration' \
+has 'id="panel-attention"' \
+  && pass "console leads with an attention inbox" || fail "console missing attention panel"
+has '/api/v1/attention' \
+  && pass "console consumes the versioned attention API" || fail "console does not call /api/v1/attention"
+has '/api/v1/system' \
+  && pass "System panel consumes the versioned system API" || fail "console does not call /api/v1/system"
+if has 'Needs attention' && has 'Installing' && has 'Offline'; then
+  pass "service health renders four states with remedies"
+else
+  fail "console missing four-state service health"
+fi
+has 'id="csDialog"' \
+  && pass "console ships a Change Set detail dialog" || fail "console missing change-set dialog"
+has '/api/v1/change-sets/' \
+  && pass "console opens change sets via the versioned API" || fail "console does not call change-set detail"
+if has '>Work<' && has '>Review<' && has '>Runs<'; then
+  pass "primary nav uses goal labels (Work/Review/Runs)"
+else
+  fail "console nav not renamed to goal labels"
+fi
+has 'id="laneFilter"' \
+  && pass "board offers a mobile lane filter" || fail "console missing mobile lane filter"
+has 'id="remember"' && has 'memory-only' \
+  && pass "tokens are memory-only unless remembered for the tab" || fail "console missing remember-for-tab consent"
+has 'id="authPosture"' \
+  && pass "connection dialog explains the connection posture" || fail "console missing connection posture"
+has 'class="skip"' && has 'href="#main"' \
+  && pass "console has a skip link to main content" || fail "console missing skip link"
+has 'prefers-reduced-motion' \
+  && pass "console honors reduced motion" || fail "console missing reduced-motion support"
+has 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
   && pass "console served as text/html" || fail "console content-type wrong"
@@ -226,6 +315,96 @@ sess="$(printf '%s' "$lt" | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')"
 code -X POST -H "Authorization: Bearer $sess" "$pbase/api/logout" >/dev/null
 [ "$(code -H "Authorization: Bearer $sess" "$pbase/api/info")" = 401 ] \
   && pass "logout revokes the session" || fail "session still valid after logout"
+
+# === 2e. versioned aggregation API (/api/v1/*) =============================
+printf '\n== versioned aggregation API ==\n'
+kb_port="$(free_port)"; v1_port="$(free_port)"
+start_kanban "$kb_port"
+wait_url "http://127.0.0.1:$kb_port/v0/kanban" || fail "kanban mock did not start"
+
+v1tok="v1tok-$(date +%s)"
+REBEKAH_GATEWAY_PORT="$v1_port" REBEKAH_GATEWAY_TOKEN="$v1tok" \
+  REBEKAH_GATEWAY_EXPOSE="weftmark" \
+  WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$kb_port" \
+  "$python" "$gateway" >"$work/gwv1.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$v1_port/healthz" || fail "v1 gateway did not start"
+vbase="http://127.0.0.1:$v1_port"
+auth_hdr="Authorization: Bearer $v1tok"
+
+# Every /api/v1/* endpoint is authenticated (no open aggregation surface).
+for ep in session system attention; do
+  [ "$(code "$vbase/api/v1/$ep")" = 401 ] \
+    && pass "/api/v1/$ep requires auth" || fail "/api/v1/$ep not 401 unauth"
+done
+
+sess="$(body -H "$auth_hdr" "$vbase/api/v1/session")"
+printf '%s' "$sess" | grep -q '"schema": "rebekah.session.v1"' \
+  && pass "/api/v1/session carries its schema" || fail "session schema wrong: $sess"
+printf '%s' "$sess" | grep -q '"profile": "administrator"' \
+  && pass "/api/v1/session reports a role profile" || fail "no profile: $sess"
+printf '%s' "$sess" | grep -q '"observed_at"' \
+  && pass "/api/v1/session is timestamped" || fail "no observed_at: $sess"
+
+sys="$(body -H "$auth_hdr" "$vbase/api/v1/system")"
+printf '%s' "$sys" | grep -q '"schema": "rebekah.system.v1"' \
+  && pass "/api/v1/system carries its schema" || fail "system schema wrong: $sys"
+printf '%s' "$sys" | grep -q '"weftmark"' \
+  && pass "/api/v1/system lists exposed backends" || fail "no backends: $sys"
+printf '%s' "$sys" | grep -q '"optional": true' \
+  && pass "/api/v1/system marks Ephor optional" || fail "ephor not optional: $sys"
+
+att="$(body -H "$auth_hdr" "$vbase/api/v1/attention")"
+printf '%s' "$att" | grep -q '"schema": "rebekah.attention.v1"' \
+  && pass "/api/v1/attention carries its schema" || fail "attention schema wrong: $att"
+printf '%s' "$att" | grep -q '"dirty_worktree"' \
+  && pass "/api/v1/attention aggregates change-set reasons" || fail "no cs reason: $att"
+printf '%s' "$att" | grep -q '"blocked"' \
+  && pass "/api/v1/attention aggregates task reasons" || fail "no task reason: $att"
+printf '%s' "$att" | grep -qE '"count": *2' \
+  && pass "/api/v1/attention counts only cards needing attention" || fail "wrong count: $att"
+printf '%s' "$att" | grep -qE '"stale": *false' \
+  && pass "/api/v1/attention is fresh when the backend answers" || fail "unexpected stale: $att"
+
+# When WeftMark is unreachable, attention degrades to stale (never a 5xx).
+stale_port="$(free_port)"
+REBEKAH_GATEWAY_PORT="$stale_port" REBEKAH_GATEWAY_TOKEN="$v1tok" \
+  REBEKAH_GATEWAY_EXPOSE="weftmark" \
+  WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$(free_port)" \
+  "$python" "$gateway" >"$work/gwv1s.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$stale_port/healthz" || fail "stale-case gateway did not start"
+sres="$(code -H "$auth_hdr" "http://127.0.0.1:$stale_port/api/v1/attention")"
+sbody="$(body -H "$auth_hdr" "http://127.0.0.1:$stale_port/api/v1/attention")"
+[ "$sres" = 200 ] && printf '%s' "$sbody" | grep -qE '"stale": *true' \
+  && pass "/api/v1/attention degrades to stale, not 5xx" || fail "no graceful degrade: $sres $sbody"
+
+# Change Set list + detail (the correlated spine). Uses the same $v1_port gateway
+# backed by the enriched kanban mock. Detail body goes to a file (pipefail-safe).
+[ "$(code "$vbase/api/v1/change-sets")" = 401 ] \
+  && pass "/api/v1/change-sets requires auth" || fail "change-sets not 401 unauth"
+csl="$work/csl.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets" > "$csl"
+grep -q '"schema": "rebekah.change-set-list.v1"' "$csl" \
+  && pass "/api/v1/change-sets carries its schema" || fail "cs list schema wrong: $(cat "$csl")"
+grep -q '"cs-1"' "$csl" && ! grep -q '"t-9"' "$csl" \
+  && pass "/api/v1/change-sets lists change sets, not tasks" || fail "cs list contents wrong: $(cat "$csl")"
+
+[ "$(code -H "$auth_hdr" "$vbase/api/v1/change-sets/nope")" = 404 ] \
+  && pass "unknown change set -> 404" || fail "unknown change set not 404"
+
+csd="$work/csd.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets/cs-1" > "$csd"
+grep -q '"schema": "rebekah.change-set.v1"' "$csd" \
+  && pass "change set detail carries its schema" || fail "cs detail schema wrong: $(cat "$csd")"
+grep -q '"weft/gateway"' "$csd" \
+  && pass "detail surfaces the git branch" || fail "cs detail missing git: $(cat "$csd")"
+if grep -q '"review-1"' "$csd" && grep -q '"claim-1"' "$csd" && grep -q '"t-9"' "$csd"; then
+  pass "detail links review, claim, and correlated task"
+else
+  fail "cs detail missing correlated links: $(cat "$csd")"
+fi
+grep -q '"opencode"' "$csd" && grep -q '"sylvae"' "$csd" && grep -qE '"linked": *false' "$csd" \
+  && pass "detail declares OpenCode/Sylvae link slots (absent, not fabricated)" \
+  || fail "cs detail missing related slots: $(cat "$csd")"
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'

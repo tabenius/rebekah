@@ -68,6 +68,10 @@
   .lane[data-lane="ready"] h3 { border-left-color: var(--lane-ready); }
   .lane[data-lane="done"] h3 { border-left-color: var(--lane-done); }
   .cards { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .board.list-view { display: flex; flex-direction: column; gap: 8px; }
+  .board.list-view .card { max-width: 640px; }
+  .board-filter { display: none; }
+  @media (max-width: 640px) { .board-filter { display: flex; } }
   .card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; }
   .card .t { font-weight: 600; }
   .card .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
@@ -98,6 +102,16 @@
     padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
   .item .t { font-weight: 600; } .item .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
   .item .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .item .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; }
+  .item.muted { opacity: .72; }
+  .openable { cursor: pointer; }
+  .openable:hover { border-color: var(--accent); }
+  .openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .chip.muted { background: var(--chip); color: var(--muted); }
+  .csrow { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .cslabel { color: var(--muted); font-size: 12px; min-width: 120px; }
+  .csval { font-size: 13px; word-break: break-word; }
+  .cshead { margin: 14px 0 8px; font-size: 13px; }
   .tab.hidden { display: none; }
   .tab:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
   textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -113,9 +127,20 @@
   .optional { border-style: dashed; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after {
     scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+  .skip { position: absolute; left: -9999px; top: 0; z-index: 10; background: var(--accent);
+    color: #fff; padding: 8px 12px; border-radius: 0 0 var(--radius) 0; }
+  .skip:focus { left: 0; }
+  .remember { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .remember input { width: auto; }
+  /* Comfortable tap targets on touch/narrow screens (WCAG 2.2 AA 44x44). */
+  @media (max-width: 640px) {
+    button, .tab, select, #laneFilter { min-height: 44px; }
+    .openable { min-height: 44px; }
+  }
 </style>
 </head>
 <body>
+<a href="#main" class="skip">Skip to main content</a>
 <header>
   <span class="brand">Rebekah <small>governed agentic runtime</small></span>
   <span class="grow"></span>
@@ -128,7 +153,8 @@
 <dialog id="authDialog" aria-labelledby="authTitle" aria-describedby="authHelp">
   <div class="dialog-body">
     <h2 id="authTitle">Connect to Rebekah</h2>
-    <p class="status" id="authHelp">Sign in with the local administrator account. Session credentials are kept only for this browser tab.</p>
+    <p class="status" id="authHelp">Sign in to reach the gateway. Credentials stay in this browser tab only.</p>
+    <p class="status" id="authPosture" role="status"></p>
     <div class="banner hidden" id="authError" role="alert" aria-live="assertive"></div>
     <div class="field hidden" id="passwordFields">
       <label for="user">Username</label>
@@ -142,30 +168,66 @@
       <input type="password" id="token" autocomplete="off" spellcheck="false">
       <button id="connect" type="button">Use token</button>
     </div>
+    <label class="remember">
+      <input type="checkbox" id="remember">
+      Remember for this tab (until it closes)
+    </label>
     <div class="dialog-actions">
       <button id="cancelAuth" class="ghost" type="button">Cancel</button>
     </div>
   </div>
 </dialog>
-<main>
+<dialog id="csDialog" aria-labelledby="csTitle">
+  <div class="dialog-body">
+    <div class="rowbar">
+      <h2 id="csTitle" style="margin:0;font-size:16px">Change Set</h2>
+      <span class="grow"></span>
+      <button id="csClose" class="ghost" type="button" aria-label="Close">Close</button>
+    </div>
+    <div id="csBody"><div class="empty">Loading…</div></div>
+  </div>
+</dialog>
+<main id="main">
   <div class="banner hidden" id="demoBanner">Demo preview — showing sample data. Open this
     page through a running <code class="k">rebekah-gateway</code> and connect with a token to see live state.</div>
   <div class="banner hidden" id="err" role="alert" aria-live="assertive"></div>
 
   <div class="tabs" role="tablist" aria-label="Rebekah console">
     <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="true" tabindex="0">Work</div>
-    <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Sessions</div>
+    <div class="tab" id="tab-attention" role="tab" aria-controls="panel-attention" aria-selected="false" tabindex="-1">Review</div>
+    <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Runs</div>
     <div class="tab hidden" id="tab-ollama" role="tab" aria-controls="panel-ollama" aria-selected="false" tabindex="-1">Models</div>
     <div class="tab" id="tab-services" role="tab" aria-controls="panel-services" aria-selected="false" tabindex="-1">System</div>
     <div class="tab" id="tab-console" role="tab" aria-controls="panel-console" aria-selected="false" tabindex="-1">Advanced</div>
   </div>
 
+  <section id="panel-attention" class="hidden" role="tabpanel" aria-labelledby="tab-attention" tabindex="0">
+    <div class="rowbar">
+      <h2 style="margin:0;font-size:16px">What needs attention?</h2>
+      <span class="grow"></span>
+      <span class="status" id="attStale" role="status" aria-live="polite"></span>
+      <button id="attRefresh" class="ghost">Refresh</button>
+    </div>
+    <div class="list" id="attList"><div class="empty">Connect to load the attention inbox.</div></div>
+  </section>
+
   <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
+    <div class="rowbar board-filter" id="boardFilter">
+      <label for="laneFilter">Lane</label>
+      <select id="laneFilter" aria-label="Filter by lane">
+        <option value="">All lanes</option>
+      </select>
+    </div>
     <div class="empty" id="boardHint">Connect to load the WeftMark coordination board.</div>
     <div class="board hidden" id="board"></div>
   </section>
 
   <section id="panel-services" class="hidden" role="tabpanel" aria-labelledby="tab-services" tabindex="0">
+    <div class="rowbar">
+      <div class="state" id="sysState" role="status" aria-live="polite">◌ checking services…</div>
+      <span class="grow"></span>
+      <button id="svcRefresh" class="ghost">Refresh</button>
+    </div>
     <div class="tiles" id="tiles"></div>
   </section>
 
@@ -187,8 +249,8 @@
   <section id="panel-opencode" class="hidden" role="tabpanel" aria-labelledby="tab-opencode" tabindex="0">
     <div class="rowbar">
       <button id="ocRefresh" class="ghost">Refresh</button>
-      <span class="status" id="ocCount"></span>
-      <span class="status">Inspect the OpenAPI spec via the API console: <code class="k">GET /doc</code>.</span>
+      <span class="status" id="ocCount" role="status" aria-live="polite"></span>
+      <span class="status">OpenCode sessions. Sylvae skill runs will join this stream once exposed. Inspect the OpenAPI spec via the API console: <code class="k">GET /doc</code>.</span>
     </div>
     <div class="list" id="ocList"><div class="empty">Loading sessions…</div></div>
   </section>
@@ -198,7 +260,7 @@
       <input type="text" id="olName" placeholder="model to pull, e.g. gemma3:e2b" spellcheck="false">
       <button id="olPull">Pull</button>
       <button id="olRefresh" class="ghost">Refresh</button>
-      <span class="status" id="olStatus"></span>
+      <span class="status" id="olStatus" role="status" aria-live="polite"></span>
     </div>
     <p class="status">Large models can exceed the gateway timeout — for off-grid installs prefer the
       pre-baked artifact cache. Small models pull fine here.</p>
@@ -238,6 +300,33 @@
     b.textContent = msg; b.classList.remove("hidden");
   };
 
+  // Bearer tokens are memory-only by default (§9). Persist to sessionStorage
+  // (tab-scoped, cleared on tab close) only with explicit "remember for this
+  // tab" consent; otherwise drop any prior copy. Never localStorage / URL.
+  function persistToken() {
+    try {
+      if ($("remember").checked && token) sessionStorage.setItem(TKEY, token);
+      else sessionStorage.removeItem(TKEY);
+    } catch (e) {}
+  }
+
+  // Explain the connection posture (local / LAN TLS / OIDC) at the decision
+  // point, per §5.1.
+  function connectionPosture() {
+    if (DEMO) return "Demo preview — no live gateway is connected.";
+    const h = location.hostname;
+    const loopback = h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "";
+    const methods = [];
+    if (authCfg && authCfg.password) methods.push("username + password");
+    if (authCfg && authCfg.token_auth) methods.push("a bearer token");
+    if (authCfg && authCfg.oidc) methods.push("OIDC");
+    const how = methods.length ? " Sign in with " + methods.join(" or ") + "." : "";
+    if (location.protocol === "https:")
+      return "Encrypted over TLS" + (loopback ? " (loopback)." : " (LAN / remote).") + how;
+    if (loopback) return "Local console on loopback (127.0.0.1), unencrypted." + how;
+    return "Warning: plain HTTP to a non-local host — the gateway refuses this without TLS." + how;
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     if (DEMO) return demo(path, opts);
@@ -266,6 +355,7 @@
     const pw = !!(authCfg && authCfg.password);
     $("passwordFields").classList.toggle("hidden", !pw);
     $("tokenFields").classList.toggle("hidden", !(authCfg && authCfg.token_auth));
+    $("authPosture").textContent = connectionPosture();
     if (!pw && !(authCfg && authCfg.token_auth)) {
       const message = "This gateway does not advertise an interactive sign-in method.";
       showErr(message);
@@ -287,7 +377,6 @@
       return;
     }
     token = r.data.token;
-    try { sessionStorage.setItem(TKEY, token); } catch (e) {}
     $("pass").value = "";
     connect();
   }
@@ -295,7 +384,7 @@
   async function connect() {
     showErr("");
     const t = $("token").value.trim();
-    if (t) { token = t; try { sessionStorage.setItem(TKEY, t); } catch (e) {} }
+    if (t) token = t;                 // memory only until verified + consented
     const r = await api("/api/info");
     if (!r.ok) {
       setConnected(false);
@@ -303,14 +392,17 @@
       return;
     }
     info = r.data;
+    persistToken();                   // persist only a verified token, and only if remembered
     setConnected(true);
     if ($("authDialog").open) $("authDialog").close();
     $("demoBanner").classList.toggle("hidden", !DEMO);
     buildBackendPicker();
+    loadSession();
+    loadAttention();
     loadBoard();
     loadServices();
     setupProductTabs();
-    if (!boardTimer) boardTimer = setInterval(loadBoard, 8000);
+    if (!boardTimer) boardTimer = setInterval(() => { loadAttention(); loadBoard(); }, 8000);
   }
 
   function exposed(name) { return info && info.expose && info.expose.indexOf(name) >= 0; }
@@ -332,7 +424,13 @@
     $("token").value = "";
     setConnected(false);
     $("board").classList.add("hidden");
+    $("board").textContent = ""; lastBoardData = null;
     $("boardHint").classList.remove("hidden");
+    $("attList").textContent = "";
+    $("attList").appendChild(el("div", "empty", "Connect to load the attention inbox."));
+    $("attStale").textContent = "";
+    $("tiles").textContent = "";
+    $("sysState").textContent = "◌ checking services…"; $("sysState").style.color = "";
     $("tab-opencode").classList.add("hidden");
     $("tab-ollama").classList.add("hidden");
     selectTab("board");
@@ -422,6 +520,68 @@
     }
   }
 
+  // --- Attention inbox (versioned aggregation API) -------------------------
+  // Consumes /api/v1/attention: normalized items the gateway aggregates from
+  // WeftMark, each with its own schema/observed_at, so the console never has to
+  // re-derive attention from raw backend shapes.
+  const REASON_LABEL = {
+    dirty_worktree: "Uncommitted changes in the worktree",
+    stale_review: "Review is stale",
+    blocked: "Blocked",
+    needs_evidence: "Missing required evidence",
+    conflict: "Merge conflict",
+  };
+  function reasonText(r) { return REASON_LABEL[r] || String(r).replace(/_/g, " "); }
+
+  async function loadAttention() {
+    const list = $("attList"); const stale = $("attStale");
+    const r = await api("/api/v1/attention");
+    if (!r.ok || !r.data || typeof r.data !== "object") {
+      list.textContent = "";
+      list.appendChild(el("div", "empty", "Attention inbox unavailable (" + r.status + ")."));
+      stale.textContent = "";
+      return;
+    }
+    const data = r.data;
+    const items = Array.isArray(data.items) ? data.items : [];
+    stale.textContent = data.stale
+      ? "⚠ showing last known state — WeftMark did not answer"
+      : (data.observed_at ? "updated " + fmtTime(data.observed_at) : "");
+    stale.style.color = data.stale ? "var(--warn)" : "var(--muted)";
+    list.textContent = "";
+    if (!items.length) {
+      list.appendChild(el("div", "empty",
+        data.stale ? "No cached attention items." : "Nothing needs attention right now."));
+      return;
+    }
+    items.forEach((it) => {
+      const row = el("div", "item");
+      const left = el("div");
+      left.appendChild(el("div", "t", it.title || it.id || "(item)"));
+      left.appendChild(el("div", "id", (it.kind || "item") + " · " + (it.id || "")));
+      const chips = el("div", "meta");
+      if (it.lane) chips.appendChild(el("span", "chip", it.lane));
+      chips.appendChild(el("span", "chip att", reasonText(it.reason)));
+      left.appendChild(chips);
+      row.appendChild(left);
+      if (it.kind === "change_set" && it.id) makeOpenable(row, it.id);
+      list.appendChild(row);
+    });
+  }
+
+  // --- Session identity (versioned aggregation API) ------------------------
+  async function loadSession() {
+    const r = await api("/api/v1/session");
+    if (!r.ok || !r.data) return;
+    const s = r.data;
+    const who = s.principal || "";
+    const profile = s.profile || "";
+    if (who || profile) {
+      $("connText").textContent = "connected · " + who + (profile ? " (" + profile + ")" : "")
+        + " · " + ((info && info.expose) || []).join(", ");
+    }
+  }
+
   // --- Board ---------------------------------------------------------------
   async function loadBoard() {
     if (!info || (info.expose && info.expose.indexOf("weftmark") < 0)) {
@@ -440,11 +600,30 @@
     return out;
   }
 
+  let lastBoardData = null;
+  const mqNarrow = window.matchMedia("(max-width: 640px)");
+
+  // Mobile (§14.7): a single sorted list with a lane filter, attention-first;
+  // desktop keeps the five lanes. Re-render on breakpoint or filter change.
+  function renderBoardList(data) {
+    const board = $("board");
+    board.classList.add("list-view");
+    const sel = $("laneFilter").value;
+    const all = [];
+    LANES.forEach((lane) => { if (!sel || sel === lane) laneCards(data, lane).forEach((c) => all.push(c)); });
+    all.sort((a, b) => ((b.attention || []).length > 0) - ((a.attention || []).length > 0));
+    if (!all.length) { board.appendChild(el("div", "empty", "No cards" + (sel ? " in " + sel : "") + ".")); return; }
+    all.forEach((c) => board.appendChild(card(c)));
+  }
+
   function renderBoard(data) {
+    lastBoardData = data;
     const board = $("board");
     board.textContent = "";
     $("boardHint").classList.add("hidden");
     board.classList.remove("hidden");
+    if (mqNarrow.matches) { renderBoardList(data); return; }
+    board.classList.remove("list-view");
     LANES.forEach((lane) => {
       const items = laneCards(data, lane);
       const laneEl = el("div", "lane"); laneEl.setAttribute("data-lane", lane);
@@ -480,42 +659,218 @@
     }
     (c.attention || []).forEach((a) => meta.appendChild(el("span", "chip att", String(a))));
     n.appendChild(meta);
+    if (c.kind !== "task" && c.id) makeOpenable(n, c.id);
     return n;
   }
 
-  // --- Services ------------------------------------------------------------
+  // A change-set card/row opens its detail. Keyboard-operable (Enter/Space).
+  function makeOpenable(node, id) {
+    node.classList.add("openable");
+    node.setAttribute("role", "button");
+    node.tabIndex = 0;
+    node.setAttribute("aria-label", "Open change set " + id);
+    node.addEventListener("click", () => openChangeSet(id));
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChangeSet(id); }
+    });
+  }
+
+  // --- Change Set detail (plan §11 / §14.6) --------------------------------
+  // Opens /api/v1/change-sets/{id}: the change set's own facts plus a links
+  // list correlating WeftMark identifiers (git branch, review, handoff, claims,
+  // tasks) and OpenCode/Sylvae slots that show as "not linked yet" until a real
+  // reference exists.
+  let lastFocus = null;
+  const LINK_LABEL = {
+    git_branch: "Git branch", review: "Review", handoff: "Handoff",
+    claim: "Claim", task: "Task",
+  };
+  async function openChangeSet(id) {
+    lastFocus = document.activeElement;
+    const dlg = $("csDialog");
+    $("csTitle").textContent = "Change Set";
+    const body = $("csBody"); body.textContent = "";
+    body.appendChild(el("div", "empty", "Loading…"));
+    if (!dlg.open) dlg.showModal();
+    const r = await api("/api/v1/change-sets/" + encodeURIComponent(id));
+    if (!r.ok || !r.data || typeof r.data !== "object") {
+      body.textContent = "";
+      body.appendChild(el("div", "empty",
+        r.status === 404 ? "This change set is no longer on the board."
+          : "Change set detail unavailable (" + r.status + ")."));
+      return;
+    }
+    renderChangeSet(r.data);
+  }
+  function field(label, value) {
+    const row = el("div", "csrow");
+    row.appendChild(el("span", "cslabel", label));
+    if (value instanceof Node) row.appendChild(value);
+    else row.appendChild(el("span", "csval", value == null ? "—" : String(value)));
+    return row;
+  }
+  function renderChangeSet(d) {
+    $("csTitle").textContent = d.title || d.id || "Change Set";
+    const body = $("csBody"); body.textContent = "";
+
+    const chips = el("div", "meta");
+    chips.appendChild(el("span", "chip", d.id));
+    if (d.lane) chips.appendChild(el("span", "chip", d.lane));
+    if (d.lifecycle_state) chips.appendChild(el("span", "chip", d.lifecycle_state));
+    if (d.readiness) {
+      const good = d.readiness === "ready" || d.readiness === "ready_with_follow_up";
+      chips.appendChild(el("span", "chip " + (good ? "ok" : "warn"), d.readiness));
+    }
+    (d.attention || []).forEach((a) => chips.appendChild(el("span", "chip att", reasonText(a))));
+    body.appendChild(chips);
+
+    const git = d.git || {};
+    if (git.branch || git.head_sha) {
+      const v = git.branch + (git.head_sha ? " @ " + String(git.head_sha).slice(0, 10) : "");
+      body.appendChild(field("Git", v));
+      if ((git.dirty_paths || []).length) {
+        body.appendChild(field("Uncommitted", git.dirty_paths.length + " path"
+          + (git.dirty_paths.length === 1 ? "" : "s")));
+      }
+    }
+    const ev = d.evidence || {};
+    if (ev.total != null) {
+      let evtxt = (ev.current || 0) + "/" + ev.total + " current";
+      const flags = [];
+      if (ev.failed) flags.push(ev.failed + " failed");
+      if (ev.obsolete) flags.push(ev.obsolete + " obsolete");
+      if (ev.unavailable) flags.push(ev.unavailable + " unavailable");
+      if (flags.length) evtxt += " · " + flags.join(", ");
+      body.appendChild(field("Evidence", evtxt));
+    }
+    if (d.review) body.appendChild(field("Review",
+      (d.review.outcome || d.review.id) + (d.review.is_current ? " (current)" : " (stale)")));
+    if (d.handoff) body.appendChild(field("Handoff",
+      (d.handoff.id || "yes") + (d.handoff.is_current ? " (current)" : " (stale)")));
+    if ((d.scope_collisions || []).length) {
+      body.appendChild(field("Scope collisions", String(d.scope_collisions.length)));
+    }
+
+    // Links: correlated identifiers across the suite.
+    body.appendChild(el("h3", "cshead", "Links"));
+    const list = el("div", "list");
+    (d.links || []).forEach((lk) => {
+      const row = el("div", "item");
+      const left = el("div");
+      left.appendChild(el("div", "t", (LINK_LABEL[lk.kind] || lk.kind) + (lk.title ? " · " + lk.title : "")));
+      left.appendChild(el("div", "id", (lk.system || "") + " · " + (lk.id || "")));
+      row.appendChild(left);
+      if (lk.state) row.appendChild(el("span", "chip", String(lk.state)));
+      list.appendChild(row);
+    });
+    const related = d.related || {};
+    ["opencode", "sylvae"].forEach((sys) => {
+      const rel = related[sys];
+      if (!rel) return;
+      const row = el("div", "item muted");
+      const left = el("div");
+      left.appendChild(el("div", "t", sys[0].toUpperCase() + sys.slice(1)));
+      left.appendChild(el("div", "id", rel.linked ? (rel.id || "") : "not linked yet"));
+      row.appendChild(left);
+      if (!rel.linked) { const c = el("span", "chip muted", "no link"); c.title = rel.reason || ""; row.appendChild(c); }
+      list.appendChild(row);
+    });
+    if (!list.children.length) list.appendChild(el("div", "empty", "No correlated identifiers."));
+    body.appendChild(list);
+  }
+
+  // --- Services: four-state health with remedies ---------------------------
+  // Backend list comes from /api/v1/system (authoritative, marks Ephor optional);
+  // each backend is probed and classified into exactly one of four states, each
+  // with a concrete remedy. Plan §14.8 / §170.
+  const STATES = {
+    ready:      { sym: "●", label: "Ready",          color: "var(--ok)",
+                  remedy: "The service is responding normally." },
+    attention:  { sym: "▲", label: "Needs attention", color: "var(--warn)",
+                  remedy: "Reachable but the health check was rejected. Check the gateway credentials and this backend's route configuration." },
+    installing: { sym: "◐", label: "Installing",     color: "var(--accent)",
+                  remedy: "The service is still coming up. Give it a moment, then refresh; if it persists, check the supervisor log." },
+    offline:    { sym: "○", label: "Offline",        color: "var(--bad)",
+                  remedy: "No response from the service. Check its log; restart only once the underlying cause is known." },
+  };
+  // Global rollup precedence: worst state wins.
+  const ROLLUP = ["offline", "attention", "installing", "ready"];
+  const ROLLUP_TEXT = {
+    ready: "All services ready", installing: "Services are still starting",
+    attention: "Some services need attention", offline: "A service is offline",
+  };
+
+  function classifyHealth(r) {
+    if (r.ok) return "ready";
+    if (r.status === 401 || r.status === 403) return "attention";
+    // 0 == transport failure (never reached); 502/503/504 == not yet up.
+    if (r.status === 0 || r.status === 502 || r.status === 503 || r.status === 504) return "installing";
+    return "offline";
+  }
+
   async function loadServices() {
     const tiles = $("tiles");
+    const sys = await api("/api/v1/system");
+    const backends = (sys.ok && sys.data && sys.data.backends)
+      ? Object.keys(sys.data.backends)
+      : ((info && info.expose) || []);
+    const ephorOptional = (sys.ok && sys.data && sys.data.ephor)
+      ? !sys.data.ephor.exposed
+      : (backends.indexOf("ephor") < 0);
     tiles.textContent = "";
-    const exposedServices = (info && info.expose) || [];
-    if (!exposedServices.length) tiles.appendChild(el("div", "empty", "No backends exposed."));
-    exposedServices.forEach(async (name) => {
+    if (!backends.length) {
+      tiles.appendChild(el("div", "empty", "No backends exposed."));
+      setSysState("ready", 0);
+      return;
+    }
+    const results = {};
+    let pending = backends.length;
+    backends.forEach((name) => {
+      const st = STATES.installing;
       const tile = el("div", "tile");
       tile.appendChild(el("div", "name", name));
-      const sub = el("div", "sub", HEALTH[name] || "/"); tile.appendChild(sub);
-      const state = el("div", "state", "◌ starting"); tile.appendChild(state);
-      const remedy = el("div", "remedy", "Waiting for the service health check."); tile.appendChild(remedy);
+      tile.appendChild(el("div", "sub", HEALTH[name] || "/" + name + "/"));
+      const state = el("div", "state", st.sym + " " + st.label); state.style.color = st.color;
+      tile.appendChild(state);
+      const remedy = el("div", "remedy", st.remedy); tile.appendChild(remedy);
       tiles.appendChild(tile);
-      const r = await api(HEALTH[name] || "/" + name + "/");
-      if (r.ok) {
-        state.textContent = "● ready"; state.style.color = "var(--ok)";
-        remedy.textContent = "The service is responding normally.";
-      } else if (r.status === 401 || r.status === 403) {
-        state.textContent = "▲ degraded"; state.style.color = "var(--warn)";
-        remedy.textContent = "The service is reachable but rejected the health request. Check gateway credentials and route configuration.";
-      } else {
-        state.textContent = "● failed (" + r.status + ")"; state.style.color = "var(--bad)";
-        remedy.textContent = "Check the service log and restart only after the underlying cause is known.";
-      }
+      const apply = (key, status) => {
+        const meta = STATES[key];
+        state.textContent = meta.sym + " " + meta.label
+          + (key === "offline" && status ? " (" + status + ")" : "");
+        state.style.color = meta.color;
+        remedy.textContent = meta.remedy;
+        results[name] = key;
+        if (--pending === 0) rollup(results);
+      };
+      api(HEALTH[name] || "/" + name + "/")
+        .then((r) => apply(classifyHealth(r), r.status))
+        .catch(() => apply("offline", 0));
     });
-    if (exposedServices.indexOf("ephor") < 0) {
+    if (ephorOptional) {
       const tile = el("div", "tile optional");
       tile.appendChild(el("div", "name", "Ephor"));
       tile.appendChild(el("div", "sub", "optional governance integration"));
-      const state = el("div", "state", "○ not installed"); state.style.color = "var(--muted)"; tile.appendChild(state);
+      const state = el("div", "state", "○ Not installed"); state.style.color = "var(--muted)";
+      tile.appendChild(state);
       tile.appendChild(el("div", "remedy", "The baseline suite works without Ephor. An administrator can add it later from an authorized source."));
       tiles.appendChild(tile);
     }
+  }
+
+  function rollup(results) {
+    let worst = "ready";
+    Object.keys(results).forEach((n) => {
+      if (ROLLUP.indexOf(results[n]) < ROLLUP.indexOf(worst)) worst = results[n];
+    });
+    setSysState(worst, Object.keys(results).length);
+  }
+  function setSysState(key, n) {
+    const meta = STATES[key] || STATES.ready;
+    const line = $("sysState");
+    line.textContent = meta.sym + " " + (ROLLUP_TEXT[key] || meta.label)
+      + (n ? " · " + n + " backend" + (n === 1 ? "" : "s") : "");
+    line.style.color = meta.color;
   }
 
   // --- API console ---------------------------------------------------------
@@ -542,7 +897,7 @@
   }
 
   // --- Tabs ----------------------------------------------------------------
-  const TABS = ["board", "opencode", "ollama", "services", "console"];
+  const TABS = ["attention", "board", "opencode", "ollama", "services", "console"];
   function visibleTabs() {
     return TABS.filter((t) => !$("tab-" + t).classList.contains("hidden"));
   }
@@ -576,12 +931,33 @@
     if (authCfg && authCfg.password) $("user").focus(); else $("token").focus();
   });
   $("cancelAuth").addEventListener("click", () => $("authDialog").close());
+  // Restore focus when the connect dialog closes (§8 focus restoration): to the
+  // session control if now connected, else back to the Connect button.
+  $("authDialog").addEventListener("close", () => {
+    const target = $("signout").classList.contains("hidden") ? $("openAuth") : $("signout");
+    if (target && !target.classList.contains("hidden") && typeof target.focus === "function") target.focus();
+  });
+  // Reflect a previously remembered (tab-scoped) token in the consent checkbox.
+  try { if (sessionStorage.getItem(TKEY)) $("remember").checked = true; } catch (e) {}
   $("connect").addEventListener("click", connect);
   $("login").addEventListener("click", login);
   $("signout").addEventListener("click", signout);
   $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
   $("user").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+  $("attRefresh").addEventListener("click", loadAttention);
+  $("svcRefresh").addEventListener("click", loadServices);
+  $("csClose").addEventListener("click", () => $("csDialog").close());
+  $("csDialog").addEventListener("close", () => {
+    if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+    lastFocus = null;
+  });
+  LANES.forEach((lane) => {
+    const o = document.createElement("option"); o.value = lane; o.textContent = lane;
+    $("laneFilter").appendChild(o);
+  });
+  $("laneFilter").addEventListener("change", () => { if (lastBoardData) renderBoard(lastBoardData); });
+  mqNarrow.addEventListener("change", () => { if (lastBoardData) renderBoard(lastBoardData); });
   $("cSend").addEventListener("click", consoleSend);
   $("ocRefresh").addEventListener("click", loadOpencode);
   $("olRefresh").addEventListener("click", loadOllama);
@@ -623,28 +999,109 @@
       ] } });
     if (path === "/ollama/api/pull")
       return Promise.resolve({ status: 200, ok: true, data: { status: "success (demo)" } });
+    if (path === "/api/v1/session")
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.session.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
+        principal: "admin", auth: "password", profile: "administrator",
+        capabilities: ["observe", "review", "operate", "administer"] } });
+    if (path === "/api/v1/system")
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.system.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
+        service: "rebekah-gateway", auth: ["password"], ui: true,
+        backends: { weftmark: { route: "/weftmark/" }, opencode: { route: "/opencode/" }, ollama: { route: "/ollama/" } },
+        ephor: { exposed: false, optional: true } } });
+    if (path === "/api/v1/attention") {
+      const items = [];
+      DEMO_BOARD.cards.forEach((c) => (c.attention || []).forEach((r) =>
+        items.push({ id: c.id, kind: "change_set", title: c.title, lane: c.lane, reason: r, source: "weftmark" })));
+      DEMO_BOARD.plan_cards.forEach((c) => (c.attention || []).forEach((r) =>
+        items.push({ id: c.id, kind: "task", title: c.title, lane: c.lane, reason: r, source: "weftmark" })));
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.attention.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
+        count: items.length, stale: false, items } });
+    }
+    if (path === "/api/v1/change-sets") {
+      const items = DEMO_BOARD.cards.map((c) => ({
+        id: c.id, title: c.title, lane: c.lane, lifecycle_state: c.lifecycle_state,
+        readiness: c.readiness, evidence: { total: c.evidence.total, current: c.evidence.current },
+        attention: c.attention || [] }));
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.change-set-list.v1", observed_at: new Date().toISOString(),
+        source: "rebekah-gateway", count: items.length, stale: false, items } });
+    }
+    if (path.indexOf("/api/v1/change-sets/") === 0)
+      return Promise.resolve(demoChangeSetDetail(decodeURIComponent(path.slice("/api/v1/change-sets/".length))));
     return Promise.resolve({ status: 200, ok: true, data: { demo: true, path } });
   }
   const DEMO_BOARD = {
     schema: "weftmark.kanban-projection.v0",
     counts: { cards: 4, plan_cards: 2, active_claims: 1 },
+    task_change_set_links: [
+      { task_id: "task-detcordon-probes", change_set_id: "cs-ingest-guardrails",
+        claim_id: "claim-ingest", binding_state: "in_progress" },
+    ],
     cards: [
       { kind: "change_set", id: "cs-ingest-guardrails", title: "Ingest guardrails", lane: "active",
-        lifecycle_state: "active", readiness: "not_ready", evidence: { total: 3, current: 2 }, attention: ["dirty_worktree"] },
+        lifecycle_state: "active", readiness: "not_ready",
+        git: { branch: "weft/ingest-guardrails", head_sha: "91f8e8b09892a210cbe4fda388c355aabd566f42",
+          observed_at: new Date(Date.now() - 600000).toISOString(), dirty_paths: ["src/ingest/guard.rs"] },
+        claims: { active_ids: ["claim-ingest"] }, scope_collisions: [],
+        evidence: { total: 3, current: 2, obsolete: 0, failed: 0, unavailable: 1 },
+        review: null, handoff: null, attention: ["dirty_worktree"] },
       { kind: "change_set", id: "cs-hypervisor-tracer", title: "Hypervisor DOM k+1 tracer", lane: "review",
-        lifecycle_state: "review", readiness: "not_ready", evidence: { total: 5, current: 5 }, attention: ["stale_review"] },
+        lifecycle_state: "review", readiness: "not_ready",
+        git: { branch: "weft/hypervisor-tracer", head_sha: "266c92f73ade0901679d81e8055f80a948cc139c",
+          observed_at: new Date(Date.now() - 3600000).toISOString(), dirty_paths: [] },
+        claims: { active_ids: [] }, scope_collisions: [],
+        evidence: { total: 5, current: 4, obsolete: 1, failed: 0, unavailable: 0 },
+        review: { id: "review-tracer", outcome: "stale", head_sha: "266c92f7", is_current: false },
+        handoff: null, attention: ["stale_review"] },
       { kind: "change_set", id: "cs-cordon-egress", title: "Cordon egress policy", lane: "ready",
-        lifecycle_state: "review", readiness: "ready", evidence: { total: 4, current: 4 }, attention: [] },
+        lifecycle_state: "review", readiness: "ready",
+        git: { branch: "weft/cordon-egress", head_sha: "a485988532fe75b3cff98b8541e432e551d06f5d",
+          observed_at: new Date(Date.now() - 7200000).toISOString(), dirty_paths: [] },
+        claims: { active_ids: [] }, scope_collisions: [],
+        evidence: { total: 4, current: 4, obsolete: 0, failed: 0, unavailable: 0 },
+        review: { id: "review-egress", outcome: "ready", head_sha: "a4859885", is_current: true },
+        handoff: { id: "handoff-egress", head_sha: "a4859885", is_current: true }, attention: [] },
       { kind: "change_set", id: "cs-bootstrap", title: "Bootstrap contract", lane: "done",
-        lifecycle_state: "merged", readiness: "ready", evidence: { total: 2, current: 2 }, attention: [] },
+        lifecycle_state: "merged", readiness: "ready",
+        git: { branch: "weft/bootstrap", head_sha: "6d33f0311b6634980466d3752194842521c61a55",
+          observed_at: new Date(Date.now() - 172800000).toISOString(), dirty_paths: [] },
+        claims: { active_ids: [] }, scope_collisions: [],
+        evidence: { total: 2, current: 2, obsolete: 0, failed: 0, unavailable: 0 },
+        review: null, handoff: null, attention: [] },
     ],
     plan_cards: [
       { kind: "task", id: "task-firecracker-jailer", title: "Firecracker jailer profile", lane: "backlog",
-        task_state: "planned", priority: "high", attention: [] },
+        task_state: "planned", priority: "high", change_set_ids: [], attention: [] },
       { kind: "task", id: "task-detcordon-probes", title: "DetCordon memory-reader probes", lane: "active",
-        task_state: "in_progress", priority: "medium", attention: ["blocked"] },
+        task_state: "in_progress", priority: "medium", change_set_ids: ["cs-ingest-guardrails"], attention: ["blocked"] },
     ],
   };
+  function demoChangeSetDetail(id) {
+    const c = DEMO_BOARD.cards.find((x) => x.id === id);
+    if (!c) return { status: 404, ok: false, data: { error: "not found" } };
+    const links = [];
+    const g = c.git || {};
+    if (g.branch) links.push({ system: "weftmark", kind: "git_branch", id: g.branch, head_sha: g.head_sha });
+    if (c.review) links.push({ system: "weftmark", kind: "review", id: c.review.id, state: c.review.outcome, current: c.review.is_current });
+    if (c.handoff) links.push({ system: "weftmark", kind: "handoff", id: c.handoff.id, current: c.handoff.is_current });
+    (c.claims && c.claims.active_ids || []).forEach((cid) => links.push({ system: "weftmark", kind: "claim", id: cid }));
+    DEMO_BOARD.plan_cards.forEach((pc) => {
+      if ((pc.change_set_ids || []).indexOf(id) >= 0)
+        links.push({ system: "weftmark", kind: "task", id: pc.id, title: pc.title, state: pc.task_state });
+    });
+    return { status: 200, ok: true, data: {
+      schema: "rebekah.change-set.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway", stale: false,
+      id: c.id, title: c.title, lane: c.lane, lifecycle_state: c.lifecycle_state, readiness: c.readiness,
+      git: c.git, evidence: c.evidence, review: c.review, handoff: c.handoff,
+      scope_collisions: c.scope_collisions || [], attention: c.attention || [], links,
+      related: {
+        opencode: { linked: false, reason: "WeftMark does not yet surface an OpenCode session reference for this change set." },
+        sylvae: { linked: false, reason: "WeftMark does not yet surface a Sylvae run reference for this change set." },
+      } } };
+  }
 })();
 </script>
 </body>
