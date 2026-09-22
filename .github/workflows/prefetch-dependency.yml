@@ -1,7 +1,5 @@
 name: Prefetch dependency pin
-on:
-  push:
-    branches: [codex/update-integrations]
+on: pull_request
 permissions:
   contents: read
 jobs:
