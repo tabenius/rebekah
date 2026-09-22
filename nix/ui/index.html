@@ -178,6 +178,11 @@
   </section>
 
   <section id="panel-services" class="hidden" role="tabpanel" aria-labelledby="tab-services" tabindex="0">
+    <div class="rowbar">
+      <div class="state" id="sysState" role="status" aria-live="polite">◌ checking services…</div>
+      <span class="grow"></span>
+      <button id="svcRefresh" class="ghost">Refresh</button>
+    </div>
     <div class="tiles" id="tiles"></div>
   </section>
 
@@ -350,6 +355,8 @@
     $("attList").textContent = "";
     $("attList").appendChild(el("div", "empty", "Connect to load the attention inbox."));
     $("attStale").textContent = "";
+    $("tiles").textContent = "";
+    $("sysState").textContent = "◌ checking services…"; $("sysState").style.color = "";
     $("tab-opencode").classList.add("hidden");
     $("tab-ollama").classList.add("hidden");
     selectTab("attention");
@@ -561,39 +568,98 @@
     return n;
   }
 
-  // --- Services ------------------------------------------------------------
+  // --- Services: four-state health with remedies ---------------------------
+  // Backend list comes from /api/v1/system (authoritative, marks Ephor optional);
+  // each backend is probed and classified into exactly one of four states, each
+  // with a concrete remedy. Plan §14.8 / §170.
+  const STATES = {
+    ready:      { sym: "●", label: "Ready",          color: "var(--ok)",
+                  remedy: "The service is responding normally." },
+    attention:  { sym: "▲", label: "Needs attention", color: "var(--warn)",
+                  remedy: "Reachable but the health check was rejected. Check the gateway credentials and this backend's route configuration." },
+    installing: { sym: "◐", label: "Installing",     color: "var(--accent)",
+                  remedy: "The service is still coming up. Give it a moment, then refresh; if it persists, check the supervisor log." },
+    offline:    { sym: "○", label: "Offline",        color: "var(--bad)",
+                  remedy: "No response from the service. Check its log; restart only once the underlying cause is known." },
+  };
+  // Global rollup precedence: worst state wins.
+  const ROLLUP = ["offline", "attention", "installing", "ready"];
+  const ROLLUP_TEXT = {
+    ready: "All services ready", installing: "Services are still starting",
+    attention: "Some services need attention", offline: "A service is offline",
+  };
+
+  function classifyHealth(r) {
+    if (r.ok) return "ready";
+    if (r.status === 401 || r.status === 403) return "attention";
+    // 0 == transport failure (never reached); 502/503/504 == not yet up.
+    if (r.status === 0 || r.status === 502 || r.status === 503 || r.status === 504) return "installing";
+    return "offline";
+  }
+
   async function loadServices() {
     const tiles = $("tiles");
+    const sys = await api("/api/v1/system");
+    const backends = (sys.ok && sys.data && sys.data.backends)
+      ? Object.keys(sys.data.backends)
+      : ((info && info.expose) || []);
+    const ephorOptional = (sys.ok && sys.data && sys.data.ephor)
+      ? !sys.data.ephor.exposed
+      : (backends.indexOf("ephor") < 0);
     tiles.textContent = "";
-    const exposedServices = (info && info.expose) || [];
-    if (!exposedServices.length) tiles.appendChild(el("div", "empty", "No backends exposed."));
-    exposedServices.forEach(async (name) => {
+    if (!backends.length) {
+      tiles.appendChild(el("div", "empty", "No backends exposed."));
+      setSysState("ready", 0);
+      return;
+    }
+    const results = {};
+    let pending = backends.length;
+    backends.forEach((name) => {
+      const st = STATES.installing;
       const tile = el("div", "tile");
       tile.appendChild(el("div", "name", name));
-      const sub = el("div", "sub", HEALTH[name] || "/"); tile.appendChild(sub);
-      const state = el("div", "state", "◌ starting"); tile.appendChild(state);
-      const remedy = el("div", "remedy", "Waiting for the service health check."); tile.appendChild(remedy);
+      tile.appendChild(el("div", "sub", HEALTH[name] || "/" + name + "/"));
+      const state = el("div", "state", st.sym + " " + st.label); state.style.color = st.color;
+      tile.appendChild(state);
+      const remedy = el("div", "remedy", st.remedy); tile.appendChild(remedy);
       tiles.appendChild(tile);
-      const r = await api(HEALTH[name] || "/" + name + "/");
-      if (r.ok) {
-        state.textContent = "● ready"; state.style.color = "var(--ok)";
-        remedy.textContent = "The service is responding normally.";
-      } else if (r.status === 401 || r.status === 403) {
-        state.textContent = "▲ degraded"; state.style.color = "var(--warn)";
-        remedy.textContent = "The service is reachable but rejected the health request. Check gateway credentials and route configuration.";
-      } else {
-        state.textContent = "● failed (" + r.status + ")"; state.style.color = "var(--bad)";
-        remedy.textContent = "Check the service log and restart only after the underlying cause is known.";
-      }
+      const apply = (key, status) => {
+        const meta = STATES[key];
+        state.textContent = meta.sym + " " + meta.label
+          + (key === "offline" && status ? " (" + status + ")" : "");
+        state.style.color = meta.color;
+        remedy.textContent = meta.remedy;
+        results[name] = key;
+        if (--pending === 0) rollup(results);
+      };
+      api(HEALTH[name] || "/" + name + "/")
+        .then((r) => apply(classifyHealth(r), r.status))
+        .catch(() => apply("offline", 0));
     });
-    if (exposedServices.indexOf("ephor") < 0) {
+    if (ephorOptional) {
       const tile = el("div", "tile optional");
       tile.appendChild(el("div", "name", "Ephor"));
       tile.appendChild(el("div", "sub", "optional governance integration"));
-      const state = el("div", "state", "○ not installed"); state.style.color = "var(--muted)"; tile.appendChild(state);
+      const state = el("div", "state", "○ Not installed"); state.style.color = "var(--muted)";
+      tile.appendChild(state);
       tile.appendChild(el("div", "remedy", "The baseline suite works without Ephor. An administrator can add it later from an authorized source."));
       tiles.appendChild(tile);
     }
+  }
+
+  function rollup(results) {
+    let worst = "ready";
+    Object.keys(results).forEach((n) => {
+      if (ROLLUP.indexOf(results[n]) < ROLLUP.indexOf(worst)) worst = results[n];
+    });
+    setSysState(worst, Object.keys(results).length);
+  }
+  function setSysState(key, n) {
+    const meta = STATES[key] || STATES.ready;
+    const line = $("sysState");
+    line.textContent = meta.sym + " " + (ROLLUP_TEXT[key] || meta.label)
+      + (n ? " · " + n + " backend" + (n === 1 ? "" : "s") : "");
+    line.style.color = meta.color;
   }
 
   // --- API console ---------------------------------------------------------
@@ -661,6 +727,7 @@
   $("user").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("attRefresh").addEventListener("click", loadAttention);
+  $("svcRefresh").addEventListener("click", loadServices);
   $("cSend").addEventListener("click", consoleSend);
   $("ocRefresh").addEventListener("click", loadOpencode);
   $("olRefresh").addEventListener("click", loadOllama);

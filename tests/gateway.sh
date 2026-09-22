@@ -196,6 +196,15 @@ printf '%s' "$ui_body" | grep -q 'id="panel-attention"' \
   && pass "console leads with an attention inbox" || fail "console missing attention panel"
 printf '%s' "$ui_body" | grep -q '/api/v1/attention' \
   && pass "console consumes the versioned attention API" || fail "console does not call /api/v1/attention"
+printf '%s' "$ui_body" | grep -q '/api/v1/system' \
+  && pass "System panel consumes the versioned system API" || fail "console does not call /api/v1/system"
+if printf '%s' "$ui_body" | grep -q 'Needs attention' \
+   && printf '%s' "$ui_body" | grep -q 'Installing' \
+   && printf '%s' "$ui_body" | grep -q 'Offline'; then
+  pass "service health renders four states with remedies"
+else
+  fail "console missing four-state service health"
+fi
 printf '%s' "$ui_body" | grep -q 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
