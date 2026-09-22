@@ -31,11 +31,14 @@
           sylvae = pkgs.callPackage ./nix/packages/sylvae.nix {
             src = sylvae-src;
           };
+          ephor = pkgs.callPackage ./nix/packages/ephor.nix {
+            src = ephor-src;
+          };
         in {
-          inherit weftmark sylvae;
+          inherit weftmark sylvae ephor;
           default = self.packages.${system}.image;
           image = pkgs.callPackage ./nix/image.nix {
-            inherit weftmark sylvae;
+            inherit weftmark sylvae ephor;
           };
         });
 
@@ -54,7 +57,7 @@
             python3 -m py_compile ${./nix/gateway.py} ${./tests/gateway-oidc.py}
             touch $out
           '';
-          inherit (self.packages.${system}) weftmark sylvae;
+          inherit (self.packages.${system}) weftmark sylvae ephor;
         });
 
       formatter = forAllSystems (system:
