@@ -111,6 +111,8 @@ adapter, or unknown scope is not equivalent to approval.
 The bootstrap deployment follows these constraints:
 
 - internal services bind to loopback or a private container network;
+- the in-image Ephor bridge is the default; an external deployment requires
+  `REBEKAH_EPHOR_ENABLE=0` plus an explicit `EPHOR_URL`;
 - remote access is provided only through an authenticated TLS proxy or secure
   tunnel;
 - only declared interfaces are exposed;
@@ -124,8 +126,9 @@ The bootstrap deployment follows these constraints:
 
 ## Implemented Ephor transport
 
-`rebekah-ephor` implements the transport boundary against KAGP's Rust
-`governance-http` bridge by default:
+Rebekah packages and supervises KAGP's Rust `governance-http` bridge on
+`127.0.0.1:9800` by default, and `rebekah-ephor` implements the transport
+boundary against it:
 
 - `POST /capture` records the correlated Change Set action;
 - `POST /finalize` closes the entry and returns its audit-chain hash;
@@ -150,7 +153,7 @@ effect on Change Set readiness.
 The first milestone is complete when an automated test can demonstrate:
 
 1. Start the pinned Rebekah image.
-2. Verify Ollama, OpenCode, Sylvae, and WeftMark readiness independently.
+2. Verify Ollama, OpenCode, Sylvae, WeftMark, and Ephor readiness independently.
 3. Create or load a WeftMark Change Set.
 4. Start a correlated OpenCode/Sylvae execution.
 5. Preserve the Sylvae `run_id`.
@@ -160,9 +163,9 @@ The first milestone is complete when an automated test can demonstrate:
 9. Verify that unavailable or failed governance never becomes `passed`.
 10. Shut down cleanly without losing declared persistent state.
 
-The fixture may initially use deterministic test doubles for external inference
-or governance transport, but it must exercise the real correlation and evidence
-boundaries.
+The container fixture exercises the real in-image Ephor capture/finalize
+transport. Deterministic transport doubles remain in the connector unit tests to
+cover denial, hold, malformed-response, and unavailable-service paths.
 
 ## Planned repository slices
 
@@ -181,7 +184,6 @@ boundaries.
     └── smoke/
 ```
 
-The flake, Nix-built image, isolated service identities, core service smoke
-check, and fail-closed Ephor transport now exist. The next slice attaches the
-normalized governance record through WeftMark's real evidence interface and
-verifies its readiness effect.
+The flake, Nix-built image, isolated service identities, supervised Ephor
+bridge, fail-closed transport, WeftMark evidence attachment, and readiness-effect
+smoke test now exist.
