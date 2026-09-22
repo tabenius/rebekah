@@ -45,6 +45,7 @@ import ssl
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # --- configuration (runtime env only; no secrets baked into the image) -------
@@ -583,6 +584,128 @@ def make_handler(cfg, auth):
                 "items": items,
             })
 
+        # --- Change Set as the visible spine (plan §11 / §14.6) --------------
+        # /api/v1/change-sets[/{id}] projects WeftMark's kanban into a change-set
+        # list and a correlated detail: git, evidence, review, handoff, claims,
+        # scope collisions, and cross-system links. OpenCode/Sylvae link slots
+        # are declared but only populated when a real reference exists -- never
+        # fabricated from a guessed join.
+        def _serve_v1_changesets(self):
+            if self._authed() is None:
+                return
+            data = self._backend_get_json("weftmark", "/v0/kanban") \
+                if "weftmark" in cfg.backends else None
+            stale = not isinstance(data, dict)
+            items = []
+            if not stale:
+                for card in (data.get("cards") or []):
+                    if card.get("kind") != "change_set":
+                        continue
+                    ev = card.get("evidence") or {}
+                    items.append({
+                        "id": card.get("id"),
+                        "title": card.get("title") or card.get("id"),
+                        "lane": card.get("lane"),
+                        "lifecycle_state": card.get("lifecycle_state"),
+                        "readiness": card.get("readiness"),
+                        "evidence": {"total": ev.get("total"), "current": ev.get("current")},
+                        "attention": card.get("attention") or [],
+                    })
+            self._json(200, {
+                "schema": "rebekah.change-set-list.v1",
+                "observed_at": _iso_now(),
+                "source": "rebekah-gateway",
+                "count": len(items),
+                "stale": stale,
+                "items": items,
+            })
+
+        def _serve_v1_changeset(self, cs_id):
+            if self._authed() is None:
+                return
+            data = self._backend_get_json("weftmark", "/v0/kanban") \
+                if "weftmark" in cfg.backends else None
+            if not isinstance(data, dict):
+                # Cannot confirm the id exists while the backend is unreachable.
+                self._fail(502, "upstream unavailable")
+                return
+            card = None
+            for c in (data.get("cards") or []):
+                if c.get("kind") == "change_set" and c.get("id") == cs_id:
+                    card = c
+                    break
+            if card is None:
+                self._fail(404, "not found")
+                return
+
+            links = []
+            git = card.get("git") or {}
+            branch = git.get("branch")
+            if branch:
+                links.append({"system": "weftmark", "kind": "git_branch",
+                              "id": branch, "head_sha": git.get("head_sha")})
+            review = card.get("review")
+            if isinstance(review, dict) and review.get("id"):
+                links.append({"system": "weftmark", "kind": "review",
+                              "id": review.get("id"), "state": review.get("outcome"),
+                              "current": review.get("is_current")})
+            handoff = card.get("handoff")
+            if isinstance(handoff, dict) and handoff.get("id"):
+                links.append({"system": "weftmark", "kind": "handoff",
+                              "id": handoff.get("id"), "current": handoff.get("is_current")})
+            for claim_id in ((card.get("claims") or {}).get("active_ids") or []):
+                links.append({"system": "weftmark", "kind": "claim", "id": claim_id})
+
+            # Correlated tasks: the plan cards that name this change set, plus the
+            # authoritative task<->change-set link records.
+            tasks = []
+            for pc in (data.get("plan_cards") or []):
+                if cs_id in (pc.get("change_set_ids") or []):
+                    tasks.append({"system": "weftmark", "kind": "task",
+                                  "id": pc.get("id"), "title": pc.get("title"),
+                                  "state": pc.get("task_state")})
+            for link in (data.get("task_change_set_links") or []):
+                if link.get("change_set_id") == cs_id and \
+                        not any(t["id"] == link.get("task_id") for t in tasks):
+                    tasks.append({"system": "weftmark", "kind": "task",
+                                  "id": link.get("task_id"),
+                                  "state": link.get("binding_state")})
+            for t in tasks:
+                links.append(t)
+
+            # OpenCode / Sylvae correlation slots. WeftMark does not yet surface
+            # those identifiers, so they are declared absent (with a reason)
+            # rather than joined on a guess -- the interface shows the spine's
+            # shape and fills in once real references land.
+            related = {
+                "opencode": {"linked": False,
+                             "reason": "WeftMark does not yet surface an OpenCode session reference for this change set."},
+                "sylvae": {"linked": False,
+                           "reason": "WeftMark does not yet surface a Sylvae run reference for this change set."},
+            }
+
+            self._json(200, {
+                "schema": "rebekah.change-set.v1",
+                "observed_at": _iso_now(),
+                "source": "rebekah-gateway",
+                "stale": False,
+                "id": card.get("id"),
+                "title": card.get("title") or card.get("id"),
+                "lane": card.get("lane"),
+                "lifecycle_state": card.get("lifecycle_state"),
+                "readiness": card.get("readiness"),
+                "git": {"branch": git.get("branch"), "head_sha": git.get("head_sha"),
+                        "observed_at": git.get("observed_at"),
+                        "dirty_paths": git.get("dirty_paths") or []},
+                "evidence": card.get("evidence") or {},
+                "review": review,
+                "handoff": handoff,
+                "scope_collisions": card.get("scope_collisions") or [],
+                "attention": card.get("attention") or [],
+                "links": links,
+                "related": related,
+            })
+
         def _serve_login(self):
             if self.command != "POST":
                 self._fail(405, "method not allowed")
@@ -677,6 +800,16 @@ def make_handler(cfg, auth):
                 return
             if raw_path in ("/api/v1/attention", "/api/v1/attention/"):
                 self._serve_v1_attention()
+                return
+            if raw_path in ("/api/v1/change-sets", "/api/v1/change-sets/"):
+                self._serve_v1_changesets()
+                return
+            if raw_path.startswith("/api/v1/change-sets/"):
+                cs_id = urllib.parse.unquote(raw_path[len("/api/v1/change-sets/"):]).strip("/")
+                if not cs_id or "/" in cs_id:
+                    self._fail(404, "not found")
+                    return
+                self._serve_v1_changeset(cs_id)
                 return
             if raw_path in ("/api/info", "/api/info/"):
                 self._serve_info()

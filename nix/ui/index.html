@@ -99,6 +99,15 @@
   .item .t { font-weight: 600; } .item .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
   .item .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .item .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; }
+  .item.muted { opacity: .72; }
+  .openable { cursor: pointer; }
+  .openable:hover { border-color: var(--accent); }
+  .openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .chip.muted { background: var(--chip); color: var(--muted); }
+  .csrow { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .cslabel { color: var(--muted); font-size: 12px; min-width: 120px; }
+  .csval { font-size: 13px; word-break: break-word; }
+  .cshead { margin: 14px 0 8px; font-size: 13px; }
   .tab.hidden { display: none; }
   .tab:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
   textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -146,6 +155,16 @@
     <div class="dialog-actions">
       <button id="cancelAuth" class="ghost" type="button">Cancel</button>
     </div>
+  </div>
+</dialog>
+<dialog id="csDialog" aria-labelledby="csTitle">
+  <div class="dialog-body">
+    <div class="rowbar">
+      <h2 id="csTitle" style="margin:0;font-size:16px">Change Set</h2>
+      <span class="grow"></span>
+      <button id="csClose" class="ghost" type="button" aria-label="Close">Close</button>
+    </div>
+    <div id="csBody"><div class="empty">Loading…</div></div>
   </div>
 </dialog>
 <main>
@@ -490,6 +509,7 @@
       chips.appendChild(el("span", "chip att", reasonText(it.reason)));
       left.appendChild(chips);
       row.appendChild(left);
+      if (it.kind === "change_set" && it.id) makeOpenable(row, it.id);
       list.appendChild(row);
     });
   }
@@ -565,7 +585,124 @@
     }
     (c.attention || []).forEach((a) => meta.appendChild(el("span", "chip att", String(a))));
     n.appendChild(meta);
+    if (c.kind !== "task" && c.id) makeOpenable(n, c.id);
     return n;
+  }
+
+  // A change-set card/row opens its detail. Keyboard-operable (Enter/Space).
+  function makeOpenable(node, id) {
+    node.classList.add("openable");
+    node.setAttribute("role", "button");
+    node.tabIndex = 0;
+    node.setAttribute("aria-label", "Open change set " + id);
+    node.addEventListener("click", () => openChangeSet(id));
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChangeSet(id); }
+    });
+  }
+
+  // --- Change Set detail (plan §11 / §14.6) --------------------------------
+  // Opens /api/v1/change-sets/{id}: the change set's own facts plus a links
+  // list correlating WeftMark identifiers (git branch, review, handoff, claims,
+  // tasks) and OpenCode/Sylvae slots that show as "not linked yet" until a real
+  // reference exists.
+  let lastFocus = null;
+  const LINK_LABEL = {
+    git_branch: "Git branch", review: "Review", handoff: "Handoff",
+    claim: "Claim", task: "Task",
+  };
+  async function openChangeSet(id) {
+    lastFocus = document.activeElement;
+    const dlg = $("csDialog");
+    $("csTitle").textContent = "Change Set";
+    const body = $("csBody"); body.textContent = "";
+    body.appendChild(el("div", "empty", "Loading…"));
+    if (!dlg.open) dlg.showModal();
+    const r = await api("/api/v1/change-sets/" + encodeURIComponent(id));
+    if (!r.ok || !r.data || typeof r.data !== "object") {
+      body.textContent = "";
+      body.appendChild(el("div", "empty",
+        r.status === 404 ? "This change set is no longer on the board."
+          : "Change set detail unavailable (" + r.status + ")."));
+      return;
+    }
+    renderChangeSet(r.data);
+  }
+  function field(label, value) {
+    const row = el("div", "csrow");
+    row.appendChild(el("span", "cslabel", label));
+    if (value instanceof Node) row.appendChild(value);
+    else row.appendChild(el("span", "csval", value == null ? "—" : String(value)));
+    return row;
+  }
+  function renderChangeSet(d) {
+    $("csTitle").textContent = d.title || d.id || "Change Set";
+    const body = $("csBody"); body.textContent = "";
+
+    const chips = el("div", "meta");
+    chips.appendChild(el("span", "chip", d.id));
+    if (d.lane) chips.appendChild(el("span", "chip", d.lane));
+    if (d.lifecycle_state) chips.appendChild(el("span", "chip", d.lifecycle_state));
+    if (d.readiness) {
+      const good = d.readiness === "ready" || d.readiness === "ready_with_follow_up";
+      chips.appendChild(el("span", "chip " + (good ? "ok" : "warn"), d.readiness));
+    }
+    (d.attention || []).forEach((a) => chips.appendChild(el("span", "chip att", reasonText(a))));
+    body.appendChild(chips);
+
+    const git = d.git || {};
+    if (git.branch || git.head_sha) {
+      const v = git.branch + (git.head_sha ? " @ " + String(git.head_sha).slice(0, 10) : "");
+      body.appendChild(field("Git", v));
+      if ((git.dirty_paths || []).length) {
+        body.appendChild(field("Uncommitted", git.dirty_paths.length + " path"
+          + (git.dirty_paths.length === 1 ? "" : "s")));
+      }
+    }
+    const ev = d.evidence || {};
+    if (ev.total != null) {
+      let evtxt = (ev.current || 0) + "/" + ev.total + " current";
+      const flags = [];
+      if (ev.failed) flags.push(ev.failed + " failed");
+      if (ev.obsolete) flags.push(ev.obsolete + " obsolete");
+      if (ev.unavailable) flags.push(ev.unavailable + " unavailable");
+      if (flags.length) evtxt += " · " + flags.join(", ");
+      body.appendChild(field("Evidence", evtxt));
+    }
+    if (d.review) body.appendChild(field("Review",
+      (d.review.outcome || d.review.id) + (d.review.is_current ? " (current)" : " (stale)")));
+    if (d.handoff) body.appendChild(field("Handoff",
+      (d.handoff.id || "yes") + (d.handoff.is_current ? " (current)" : " (stale)")));
+    if ((d.scope_collisions || []).length) {
+      body.appendChild(field("Scope collisions", String(d.scope_collisions.length)));
+    }
+
+    // Links: correlated identifiers across the suite.
+    body.appendChild(el("h3", "cshead", "Links"));
+    const list = el("div", "list");
+    (d.links || []).forEach((lk) => {
+      const row = el("div", "item");
+      const left = el("div");
+      left.appendChild(el("div", "t", (LINK_LABEL[lk.kind] || lk.kind) + (lk.title ? " · " + lk.title : "")));
+      left.appendChild(el("div", "id", (lk.system || "") + " · " + (lk.id || "")));
+      row.appendChild(left);
+      if (lk.state) row.appendChild(el("span", "chip", String(lk.state)));
+      list.appendChild(row);
+    });
+    const related = d.related || {};
+    ["opencode", "sylvae"].forEach((sys) => {
+      const rel = related[sys];
+      if (!rel) return;
+      const row = el("div", "item muted");
+      const left = el("div");
+      left.appendChild(el("div", "t", sys[0].toUpperCase() + sys.slice(1)));
+      left.appendChild(el("div", "id", rel.linked ? (rel.id || "") : "not linked yet"));
+      row.appendChild(left);
+      if (!rel.linked) { const c = el("span", "chip muted", "no link"); c.title = rel.reason || ""; row.appendChild(c); }
+      list.appendChild(row);
+    });
+    if (!list.children.length) list.appendChild(el("div", "empty", "No correlated identifiers."));
+    body.appendChild(list);
   }
 
   // --- Services: four-state health with remedies ---------------------------
@@ -728,6 +865,11 @@
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("attRefresh").addEventListener("click", loadAttention);
   $("svcRefresh").addEventListener("click", loadServices);
+  $("csClose").addEventListener("click", () => $("csDialog").close());
+  $("csDialog").addEventListener("close", () => {
+    if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+    lastFocus = null;
+  });
   $("cSend").addEventListener("click", consoleSend);
   $("ocRefresh").addEventListener("click", loadOpencode);
   $("olRefresh").addEventListener("click", loadOllama);
@@ -790,28 +932,88 @@
         schema: "rebekah.attention.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
         count: items.length, stale: false, items } });
     }
+    if (path === "/api/v1/change-sets") {
+      const items = DEMO_BOARD.cards.map((c) => ({
+        id: c.id, title: c.title, lane: c.lane, lifecycle_state: c.lifecycle_state,
+        readiness: c.readiness, evidence: { total: c.evidence.total, current: c.evidence.current },
+        attention: c.attention || [] }));
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.change-set-list.v1", observed_at: new Date().toISOString(),
+        source: "rebekah-gateway", count: items.length, stale: false, items } });
+    }
+    if (path.indexOf("/api/v1/change-sets/") === 0)
+      return Promise.resolve(demoChangeSetDetail(decodeURIComponent(path.slice("/api/v1/change-sets/".length))));
     return Promise.resolve({ status: 200, ok: true, data: { demo: true, path } });
   }
   const DEMO_BOARD = {
     schema: "weftmark.kanban-projection.v0",
     counts: { cards: 4, plan_cards: 2, active_claims: 1 },
+    task_change_set_links: [
+      { task_id: "task-detcordon-probes", change_set_id: "cs-ingest-guardrails",
+        claim_id: "claim-ingest", binding_state: "in_progress" },
+    ],
     cards: [
       { kind: "change_set", id: "cs-ingest-guardrails", title: "Ingest guardrails", lane: "active",
-        lifecycle_state: "active", readiness: "not_ready", evidence: { total: 3, current: 2 }, attention: ["dirty_worktree"] },
+        lifecycle_state: "active", readiness: "not_ready",
+        git: { branch: "weft/ingest-guardrails", head_sha: "91f8e8b09892a210cbe4fda388c355aabd566f42",
+          observed_at: new Date(Date.now() - 600000).toISOString(), dirty_paths: ["src/ingest/guard.rs"] },
+        claims: { active_ids: ["claim-ingest"] }, scope_collisions: [],
+        evidence: { total: 3, current: 2, obsolete: 0, failed: 0, unavailable: 1 },
+        review: null, handoff: null, attention: ["dirty_worktree"] },
       { kind: "change_set", id: "cs-hypervisor-tracer", title: "Hypervisor DOM k+1 tracer", lane: "review",
-        lifecycle_state: "review", readiness: "not_ready", evidence: { total: 5, current: 5 }, attention: ["stale_review"] },
+        lifecycle_state: "review", readiness: "not_ready",
+        git: { branch: "weft/hypervisor-tracer", head_sha: "266c92f73ade0901679d81e8055f80a948cc139c",
+          observed_at: new Date(Date.now() - 3600000).toISOString(), dirty_paths: [] },
+        claims: { active_ids: [] }, scope_collisions: [],
+        evidence: { total: 5, current: 4, obsolete: 1, failed: 0, unavailable: 0 },
+        review: { id: "review-tracer", outcome: "stale", head_sha: "266c92f7", is_current: false },
+        handoff: null, attention: ["stale_review"] },
       { kind: "change_set", id: "cs-cordon-egress", title: "Cordon egress policy", lane: "ready",
-        lifecycle_state: "review", readiness: "ready", evidence: { total: 4, current: 4 }, attention: [] },
+        lifecycle_state: "review", readiness: "ready",
+        git: { branch: "weft/cordon-egress", head_sha: "a485988532fe75b3cff98b8541e432e551d06f5d",
+          observed_at: new Date(Date.now() - 7200000).toISOString(), dirty_paths: [] },
+        claims: { active_ids: [] }, scope_collisions: [],
+        evidence: { total: 4, current: 4, obsolete: 0, failed: 0, unavailable: 0 },
+        review: { id: "review-egress", outcome: "ready", head_sha: "a4859885", is_current: true },
+        handoff: { id: "handoff-egress", head_sha: "a4859885", is_current: true }, attention: [] },
       { kind: "change_set", id: "cs-bootstrap", title: "Bootstrap contract", lane: "done",
-        lifecycle_state: "merged", readiness: "ready", evidence: { total: 2, current: 2 }, attention: [] },
+        lifecycle_state: "merged", readiness: "ready",
+        git: { branch: "weft/bootstrap", head_sha: "6d33f0311b6634980466d3752194842521c61a55",
+          observed_at: new Date(Date.now() - 172800000).toISOString(), dirty_paths: [] },
+        claims: { active_ids: [] }, scope_collisions: [],
+        evidence: { total: 2, current: 2, obsolete: 0, failed: 0, unavailable: 0 },
+        review: null, handoff: null, attention: [] },
     ],
     plan_cards: [
       { kind: "task", id: "task-firecracker-jailer", title: "Firecracker jailer profile", lane: "backlog",
-        task_state: "planned", priority: "high", attention: [] },
+        task_state: "planned", priority: "high", change_set_ids: [], attention: [] },
       { kind: "task", id: "task-detcordon-probes", title: "DetCordon memory-reader probes", lane: "active",
-        task_state: "in_progress", priority: "medium", attention: ["blocked"] },
+        task_state: "in_progress", priority: "medium", change_set_ids: ["cs-ingest-guardrails"], attention: ["blocked"] },
     ],
   };
+  function demoChangeSetDetail(id) {
+    const c = DEMO_BOARD.cards.find((x) => x.id === id);
+    if (!c) return { status: 404, ok: false, data: { error: "not found" } };
+    const links = [];
+    const g = c.git || {};
+    if (g.branch) links.push({ system: "weftmark", kind: "git_branch", id: g.branch, head_sha: g.head_sha });
+    if (c.review) links.push({ system: "weftmark", kind: "review", id: c.review.id, state: c.review.outcome, current: c.review.is_current });
+    if (c.handoff) links.push({ system: "weftmark", kind: "handoff", id: c.handoff.id, current: c.handoff.is_current });
+    (c.claims && c.claims.active_ids || []).forEach((cid) => links.push({ system: "weftmark", kind: "claim", id: cid }));
+    DEMO_BOARD.plan_cards.forEach((pc) => {
+      if ((pc.change_set_ids || []).indexOf(id) >= 0)
+        links.push({ system: "weftmark", kind: "task", id: pc.id, title: pc.title, state: pc.task_state });
+    });
+    return { status: 200, ok: true, data: {
+      schema: "rebekah.change-set.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway", stale: false,
+      id: c.id, title: c.title, lane: c.lane, lifecycle_state: c.lifecycle_state, readiness: c.readiness,
+      git: c.git, evidence: c.evidence, review: c.review, handoff: c.handoff,
+      scope_collisions: c.scope_collisions || [], attention: c.attention || [], links,
+      related: {
+        opencode: { linked: false, reason: "WeftMark does not yet surface an OpenCode session reference for this change set." },
+        sylvae: { linked: false, reason: "WeftMark does not yet surface a Sylvae run reference for this change set." },
+      } } };
+  }
 })();
 </script>
 </body>

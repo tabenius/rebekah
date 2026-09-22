@@ -21,12 +21,17 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
 - `nix/gateway.py` — `rebekah-gateway`: the single authenticated entry point for
   Rebekah's API (password, token and/or OIDC auth), fronting the loopback
   backends. Also serves the built-in web console, `GET /api/info`, and the
-  versioned aggregation API (`GET /api/v1/session|system|attention`) the console
-  consumes instead of reverse-engineering each backend — every response carries a
-  `schema`, `source`, and `observed_at` (see `docs/HUMAN-INTERFACE-PLAN.md`).
+  versioned aggregation API (`GET /api/v1/session|system|attention`, and
+  `GET /api/v1/change-sets[/{id}]` — the Change Set spine correlating WeftMark
+  git/evidence/review/handoff/claims/tasks, with OpenCode/Sylvae link slots) the
+  console consumes instead of reverse-engineering each backend — every response
+  carries a `schema`, `source`, and `observed_at` (see
+  `docs/HUMAN-INTERFACE-PLAN.md` and `docs/UI-INSPIRATION-RAGBAZ-KANBAN.md`).
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin:
-  a "What needs attention?" inbox fed by `/api/v1/attention`, the WeftMark board,
-  service health + an authenticated API console).
+  a "What needs attention?" inbox fed by `/api/v1/attention`, the WeftMark board
+  whose change-set cards open a Change Set detail dialog
+  (`/api/v1/change-sets/{id}`), four-state service health + an authenticated API
+  console).
 - `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.

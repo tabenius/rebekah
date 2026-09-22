@@ -69,15 +69,30 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 port = int(sys.argv[1])
 KANBAN = {
     "schema": "weftmark.kanban-projection.v0",
+    "task_change_set_links": [
+        {"task_id": "t-9", "change_set_id": "cs-1",
+         "claim_id": "claim-1", "binding_state": "in_progress"},
+    ],
     "cards": [
         {"kind": "change_set", "id": "cs-1", "title": "Add gateway",
-         "lane": "review", "attention": ["dirty_worktree"]},
+         "lane": "review", "lifecycle_state": "review", "readiness": "unreviewed",
+         "git": {"branch": "weft/gateway", "head_sha": "91f8e8b09892a210",
+                 "observed_at": "2026-08-19T12:58:00+00:00",
+                 "dirty_paths": ["nix/gateway.py"]},
+         "claims": {"active_ids": ["claim-1"]}, "scope_collisions": [],
+         "evidence": {"total": 3, "current": 2, "obsolete": 0, "failed": 0, "unavailable": 1},
+         "review": {"id": "review-1", "outcome": "unreviewed", "is_current": True},
+         "handoff": None, "attention": ["dirty_worktree"]},
         {"kind": "change_set", "id": "cs-2", "title": "Quiet one",
-         "lane": "active", "attention": []},
+         "lane": "active", "lifecycle_state": "active", "readiness": "ready",
+         "git": {"branch": "weft/quiet", "head_sha": "abc", "dirty_paths": []},
+         "claims": {"active_ids": []}, "scope_collisions": [],
+         "evidence": {"total": 1, "current": 1}, "review": None, "handoff": None,
+         "attention": []},
     ],
     "plan_cards": [
-        {"kind": "task", "id": "t-9", "title": "Wire API",
-         "lane": "backlog", "attention": ["blocked"]},
+        {"kind": "task", "id": "t-9", "title": "Wire API", "lane": "backlog",
+         "task_state": "todo", "change_set_ids": ["cs-1"], "attention": ["blocked"]},
     ],
 }
 class H(BaseHTTPRequestHandler):
@@ -209,6 +224,10 @@ if has 'Needs attention' && has 'Installing' && has 'Offline'; then
 else
   fail "console missing four-state service health"
 fi
+has 'id="csDialog"' \
+  && pass "console ships a Change Set detail dialog" || fail "console missing change-set dialog"
+has '/api/v1/change-sets/' \
+  && pass "console opens change sets via the versioned API" || fail "console does not call change-set detail"
 has 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
@@ -344,6 +363,33 @@ sres="$(code -H "$auth_hdr" "http://127.0.0.1:$stale_port/api/v1/attention")"
 sbody="$(body -H "$auth_hdr" "http://127.0.0.1:$stale_port/api/v1/attention")"
 [ "$sres" = 200 ] && printf '%s' "$sbody" | grep -qE '"stale": *true' \
   && pass "/api/v1/attention degrades to stale, not 5xx" || fail "no graceful degrade: $sres $sbody"
+
+# Change Set list + detail (the correlated spine). Uses the same $v1_port gateway
+# backed by the enriched kanban mock. Detail body goes to a file (pipefail-safe).
+[ "$(code "$vbase/api/v1/change-sets")" = 401 ] \
+  && pass "/api/v1/change-sets requires auth" || fail "change-sets not 401 unauth"
+csl="$work/csl.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets" > "$csl"
+grep -q '"schema": "rebekah.change-set-list.v1"' "$csl" \
+  && pass "/api/v1/change-sets carries its schema" || fail "cs list schema wrong: $(cat "$csl")"
+grep -q '"cs-1"' "$csl" && ! grep -q '"t-9"' "$csl" \
+  && pass "/api/v1/change-sets lists change sets, not tasks" || fail "cs list contents wrong: $(cat "$csl")"
+
+[ "$(code -H "$auth_hdr" "$vbase/api/v1/change-sets/nope")" = 404 ] \
+  && pass "unknown change set -> 404" || fail "unknown change set not 404"
+
+csd="$work/csd.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets/cs-1" > "$csd"
+grep -q '"schema": "rebekah.change-set.v1"' "$csd" \
+  && pass "change set detail carries its schema" || fail "cs detail schema wrong: $(cat "$csd")"
+grep -q '"weft/gateway"' "$csd" \
+  && pass "detail surfaces the git branch" || fail "cs detail missing git: $(cat "$csd")"
+if grep -q '"review-1"' "$csd" && grep -q '"claim-1"' "$csd" && grep -q '"t-9"' "$csd"; then
+  pass "detail links review, claim, and correlated task"
+else
+  fail "cs detail missing correlated links: $(cat "$csd")"
+fi
+grep -q '"opencode"' "$csd" && grep -q '"sylvae"' "$csd" && grep -qE '"linked": *false' "$csd" \
+  && pass "detail declares OpenCode/Sylvae link slots (absent, not fabricated)" \
+  || fail "cs detail missing related slots: $(cat "$csd")"
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'
