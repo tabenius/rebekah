@@ -25,7 +25,8 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   consumes instead of reverse-engineering each backend — every response carries a
   `schema`, `source`, and `observed_at` (see `docs/HUMAN-INTERFACE-PLAN.md`).
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin:
-  WeftMark board + service health + an authenticated API console).
+  a "What needs attention?" inbox fed by `/api/v1/attention`, the WeftMark board,
+  service health + an authenticated API console).
 - `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.

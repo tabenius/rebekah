@@ -192,6 +192,10 @@ printf '%s' "$ui_body" | grep -q 'role="tabpanel"' \
   && pass "console exposes accessible tab panels" || fail "console missing tabpanel semantics"
 printf '%s' "$ui_body" | grep -q '>Advanced<' \
   && pass "raw API tools are under Advanced" || fail "console missing Advanced navigation"
+printf '%s' "$ui_body" | grep -q 'id="panel-attention"' \
+  && pass "console leads with an attention inbox" || fail "console missing attention panel"
+printf '%s' "$ui_body" | grep -q '/api/v1/attention' \
+  && pass "console consumes the versioned attention API" || fail "console does not call /api/v1/attention"
 printf '%s' "$ui_body" | grep -q 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \

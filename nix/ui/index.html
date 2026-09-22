@@ -98,6 +98,7 @@
     padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
   .item .t { font-weight: 600; } .item .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
   .item .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .item .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; }
   .tab.hidden { display: none; }
   .tab:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
   textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -153,14 +154,25 @@
   <div class="banner hidden" id="err" role="alert" aria-live="assertive"></div>
 
   <div class="tabs" role="tablist" aria-label="Rebekah console">
-    <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="true" tabindex="0">Work</div>
+    <div class="tab" id="tab-attention" role="tab" aria-controls="panel-attention" aria-selected="true" tabindex="0">Attention</div>
+    <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="false" tabindex="-1">Work</div>
     <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Sessions</div>
     <div class="tab hidden" id="tab-ollama" role="tab" aria-controls="panel-ollama" aria-selected="false" tabindex="-1">Models</div>
     <div class="tab" id="tab-services" role="tab" aria-controls="panel-services" aria-selected="false" tabindex="-1">System</div>
     <div class="tab" id="tab-console" role="tab" aria-controls="panel-console" aria-selected="false" tabindex="-1">Advanced</div>
   </div>
 
-  <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
+  <section id="panel-attention" role="tabpanel" aria-labelledby="tab-attention" tabindex="0">
+    <div class="rowbar">
+      <h2 style="margin:0;font-size:16px">What needs attention?</h2>
+      <span class="grow"></span>
+      <span class="status" id="attStale" role="status" aria-live="polite"></span>
+      <button id="attRefresh" class="ghost">Refresh</button>
+    </div>
+    <div class="list" id="attList"><div class="empty">Connect to load the attention inbox.</div></div>
+  </section>
+
+  <section id="panel-board" class="hidden" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
     <div class="empty" id="boardHint">Connect to load the WeftMark coordination board.</div>
     <div class="board hidden" id="board"></div>
   </section>
@@ -307,10 +319,12 @@
     if ($("authDialog").open) $("authDialog").close();
     $("demoBanner").classList.toggle("hidden", !DEMO);
     buildBackendPicker();
+    loadSession();
+    loadAttention();
     loadBoard();
     loadServices();
     setupProductTabs();
-    if (!boardTimer) boardTimer = setInterval(loadBoard, 8000);
+    if (!boardTimer) boardTimer = setInterval(() => { loadAttention(); loadBoard(); }, 8000);
   }
 
   function exposed(name) { return info && info.expose && info.expose.indexOf(name) >= 0; }
@@ -333,9 +347,12 @@
     setConnected(false);
     $("board").classList.add("hidden");
     $("boardHint").classList.remove("hidden");
+    $("attList").textContent = "";
+    $("attList").appendChild(el("div", "empty", "Connect to load the attention inbox."));
+    $("attStale").textContent = "";
     $("tab-opencode").classList.add("hidden");
     $("tab-ollama").classList.add("hidden");
-    selectTab("board");
+    selectTab("attention");
   }
 
   // --- helpers -------------------------------------------------------------
@@ -419,6 +436,67 @@
     } else {
       $("olStatus").textContent = "pull failed (" + r.status + ")" +
         (r.status === 502 ? " — likely the gateway timeout; try a smaller model or the artifact cache." : "");
+    }
+  }
+
+  // --- Attention inbox (versioned aggregation API) -------------------------
+  // Consumes /api/v1/attention: normalized items the gateway aggregates from
+  // WeftMark, each with its own schema/observed_at, so the console never has to
+  // re-derive attention from raw backend shapes.
+  const REASON_LABEL = {
+    dirty_worktree: "Uncommitted changes in the worktree",
+    stale_review: "Review is stale",
+    blocked: "Blocked",
+    needs_evidence: "Missing required evidence",
+    conflict: "Merge conflict",
+  };
+  function reasonText(r) { return REASON_LABEL[r] || String(r).replace(/_/g, " "); }
+
+  async function loadAttention() {
+    const list = $("attList"); const stale = $("attStale");
+    const r = await api("/api/v1/attention");
+    if (!r.ok || !r.data || typeof r.data !== "object") {
+      list.textContent = "";
+      list.appendChild(el("div", "empty", "Attention inbox unavailable (" + r.status + ")."));
+      stale.textContent = "";
+      return;
+    }
+    const data = r.data;
+    const items = Array.isArray(data.items) ? data.items : [];
+    stale.textContent = data.stale
+      ? "⚠ showing last known state — WeftMark did not answer"
+      : (data.observed_at ? "updated " + fmtTime(data.observed_at) : "");
+    stale.style.color = data.stale ? "var(--warn)" : "var(--muted)";
+    list.textContent = "";
+    if (!items.length) {
+      list.appendChild(el("div", "empty",
+        data.stale ? "No cached attention items." : "Nothing needs attention right now."));
+      return;
+    }
+    items.forEach((it) => {
+      const row = el("div", "item");
+      const left = el("div");
+      left.appendChild(el("div", "t", it.title || it.id || "(item)"));
+      left.appendChild(el("div", "id", (it.kind || "item") + " · " + (it.id || "")));
+      const chips = el("div", "meta");
+      if (it.lane) chips.appendChild(el("span", "chip", it.lane));
+      chips.appendChild(el("span", "chip att", reasonText(it.reason)));
+      left.appendChild(chips);
+      row.appendChild(left);
+      list.appendChild(row);
+    });
+  }
+
+  // --- Session identity (versioned aggregation API) ------------------------
+  async function loadSession() {
+    const r = await api("/api/v1/session");
+    if (!r.ok || !r.data) return;
+    const s = r.data;
+    const who = s.principal || "";
+    const profile = s.profile || "";
+    if (who || profile) {
+      $("connText").textContent = "connected · " + who + (profile ? " (" + profile + ")" : "")
+        + " · " + ((info && info.expose) || []).join(", ");
     }
   }
 
@@ -542,7 +620,7 @@
   }
 
   // --- Tabs ----------------------------------------------------------------
-  const TABS = ["board", "opencode", "ollama", "services", "console"];
+  const TABS = ["attention", "board", "opencode", "ollama", "services", "console"];
   function visibleTabs() {
     return TABS.filter((t) => !$("tab-" + t).classList.contains("hidden"));
   }
@@ -582,6 +660,7 @@
   $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
   $("user").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+  $("attRefresh").addEventListener("click", loadAttention);
   $("cSend").addEventListener("click", consoleSend);
   $("ocRefresh").addEventListener("click", loadOpencode);
   $("olRefresh").addEventListener("click", loadOllama);
@@ -623,6 +702,27 @@
       ] } });
     if (path === "/ollama/api/pull")
       return Promise.resolve({ status: 200, ok: true, data: { status: "success (demo)" } });
+    if (path === "/api/v1/session")
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.session.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
+        principal: "admin", auth: "password", profile: "administrator",
+        capabilities: ["observe", "review", "operate", "administer"] } });
+    if (path === "/api/v1/system")
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.system.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
+        service: "rebekah-gateway", auth: ["password"], ui: true,
+        backends: { weftmark: { route: "/weftmark/" }, opencode: { route: "/opencode/" }, ollama: { route: "/ollama/" } },
+        ephor: { exposed: false, optional: true } } });
+    if (path === "/api/v1/attention") {
+      const items = [];
+      DEMO_BOARD.cards.forEach((c) => (c.attention || []).forEach((r) =>
+        items.push({ id: c.id, kind: "change_set", title: c.title, lane: c.lane, reason: r, source: "weftmark" })));
+      DEMO_BOARD.plan_cards.forEach((c) => (c.attention || []).forEach((r) =>
+        items.push({ id: c.id, kind: "task", title: c.title, lane: c.lane, reason: r, source: "weftmark" })));
+      return Promise.resolve({ status: 200, ok: true, data: {
+        schema: "rebekah.attention.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
+        count: items.length, stale: false, items } });
+    }
     return Promise.resolve({ status: 200, ok: true, data: { demo: true, path } });
   }
   const DEMO_BOARD = {
