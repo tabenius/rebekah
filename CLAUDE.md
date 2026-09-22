@@ -133,6 +133,13 @@ them in any change:
      authenticated, and `GET /api/info` requires auth. The console renders
      untrusted backend data via `textContent`/`createElement`, never
      `innerHTML` — keep it that way.
+   - Browser SSO (OIDC Authorization Code + PKCE, public client) is offered when
+     `REBEKAH_OIDC_CLIENT_ID` is set. `GET /api/auth` is intentionally
+     unauthenticated but reveals only the *public* sign-in parameters (issuer,
+     client id, scope) — never the token, a JWKS/verification key, or the
+     backend list. When sign-in is configured the console CSP adds the issuer
+     origin to `connect-src` (for the browser's discovery + token fetch) and
+     nothing else. Keep `/api/auth` free of secrets.
 8. **Least-privilege run.** The supervisor needs only five Linux capabilities:
    `CHOWN` (set up state dirs), `SETUID`/`SETGID` (launch each service as its own
    uid), `KILL` (forward termination to the cross-uid children), and

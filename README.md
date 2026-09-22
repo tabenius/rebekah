@@ -173,6 +173,32 @@ alongside) the token:
   #           -e REBEKAH_OIDC_ALLOWED_SUBJECTS="alice@example.org bob@example.org"
 ```
 
+#### Browser sign-in (SSO)
+
+Add `REBEKAH_OIDC_CLIENT_ID` and the console shows a **Sign in with SSO** button
+that runs a standard OIDC **Authorization Code + PKCE** flow in the browser (a
+public client — no client secret is held). It discovers the issuer's endpoints
+from `/.well-known/openid-configuration`, and the resulting access token becomes
+the gateway bearer.
+
+```bash
+  -e REBEKAH_OIDC_ISSUER=https://idp.example.org/ \
+  -e REBEKAH_OIDC_AUDIENCE=rebekah \
+  -e REBEKAH_OIDC_CLIENT_ID=rebekah-console \
+  # optional: -e REBEKAH_OIDC_SCOPE="openid profile email" \
+  #           -e REBEKAH_OIDC_LOGIN_EXTRA="audience=rebekah"   # raw extra auth params
+```
+
+Register the console's URL (`https://<host>:<port>/ui/`) as a redirect URI at the
+IdP, and allow the console origin for CORS on the IdP's discovery + token
+endpoints. The gateway serves an unauthenticated `GET /api/auth` with only the
+public sign-in parameters (issuer, client id, scope) so the page can start the
+flow before it has a credential, and — only when sign-in is configured — opens
+the issuer origin in the console's `connect-src` CSP. `REBEKAH_OIDC_LOGIN_EXTRA`
+appends provider-specific auth params (e.g. Auth0 `audience=…`, or RFC 8707
+`resource=…`) so the IdP issues a token whose `aud` matches
+`REBEKAH_OIDC_AUDIENCE`.
+
 Set `REBEKAH_GATEWAY_ENABLE=0` to run without the gateway (loopback services
 only).
 

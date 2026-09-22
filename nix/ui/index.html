@@ -109,6 +109,7 @@
     <span class="status" id="conn"><span class="dot" id="dot"></span><span id="connText">not connected</span></span>
     <input type="password" id="token" placeholder="Bearer token" autocomplete="off" spellcheck="false">
     <button id="connect">Connect</button>
+    <button id="sso" class="ghost hidden">Sign in with SSO</button>
     <button id="signout" class="ghost hidden">Sign out</button>
   </div>
 </header>
@@ -180,9 +181,10 @@
     sylvae: "/sylvae/", ollama: "/ollama/api/version",
   };
   const LANES = ["backlog", "active", "review", "ready", "done"];
+  const SKEY = "rebekah.oidc";
   let token = "";
   try { token = sessionStorage.getItem(TKEY) || ""; } catch (e) {}
-  let info = null, boardTimer = null;
+  let info = null, boardTimer = null, authCfg = null;
 
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => {
@@ -217,6 +219,78 @@
     $("signout").classList.toggle("hidden", !ok || DEMO);
     $("token").classList.toggle("hidden", ok);
     $("connect").classList.toggle("hidden", ok);
+    $("sso").classList.toggle("hidden", ok || !(authCfg && authCfg.oidc));
+  }
+
+  // --- OIDC browser sign-in (Authorization Code + PKCE, public client) -----
+  function b64url(bytes) {
+    let s = btoa(String.fromCharCode.apply(null, new Uint8Array(bytes)));
+    return s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function randToken(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return b64url(a); }
+  async function sha256url(str) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+    return b64url(d);
+  }
+  async function loadAuthConfig() {
+    if (DEMO) { $("sso").classList.add("hidden"); return; }
+    const r = await api("/api/auth");
+    authCfg = (r.ok && r.data) ? r.data : null;
+    $("sso").classList.toggle("hidden", !(authCfg && authCfg.oidc));
+  }
+  async function ssoLogin() {
+    showErr("");
+    if (!(authCfg && authCfg.oidc)) return;
+    const oidc = authCfg.oidc;
+    let meta;
+    try {
+      const res = await fetch(oidc.issuer.replace(/\/$/, "") + "/.well-known/openid-configuration");
+      if (!res.ok) throw new Error(String(res.status));
+      meta = await res.json();
+    } catch (e) { showErr("OIDC discovery failed (check the issuer / CORS)."); return; }
+    if (!meta.authorization_endpoint || !meta.token_endpoint) { showErr("Issuer metadata incomplete."); return; }
+    const verifier = randToken(48);
+    const state = randToken(16);
+    const redirect = location.origin + location.pathname;
+    try {
+      sessionStorage.setItem(SKEY, JSON.stringify(
+        { verifier, state, token_endpoint: meta.token_endpoint, client_id: oidc.client_id, redirect }));
+    } catch (e) { showErr("Cannot start sign-in without session storage."); return; }
+    const p = new URLSearchParams({
+      response_type: "code", client_id: oidc.client_id, redirect_uri: redirect,
+      scope: oidc.scope || "openid", state: state,
+      code_challenge: await sha256url(verifier), code_challenge_method: "S256",
+    });
+    let url = meta.authorization_endpoint +
+      (meta.authorization_endpoint.indexOf("?") >= 0 ? "&" : "?") + p.toString();
+    if (oidc.login_extra) url += "&" + oidc.login_extra;
+    location.assign(url);
+  }
+  async function completeSso() {
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(SKEY) || "null"); } catch (e) {}
+    try { sessionStorage.removeItem(SKEY); } catch (e) {}
+    // Strip code/state from the URL so a refresh or bookmark can't replay them.
+    try { history.replaceState({}, document.title, location.pathname); } catch (e) {}
+    if (params.get("error")) { showErr("Sign-in failed: " + params.get("error")); return; }
+    if (!saved || saved.state !== params.get("state")) { showErr("Sign-in state mismatch; try again."); return; }
+    let res;
+    try {
+      res = await fetch(saved.token_endpoint, {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code", code: params.get("code"),
+          redirect_uri: saved.redirect, client_id: saved.client_id, code_verifier: saved.verifier,
+        }).toString(),
+      });
+    } catch (e) { showErr("Token exchange failed (network / CORS)."); return; }
+    if (!res.ok) { showErr("Token exchange failed (" + res.status + ")."); return; }
+    let tok; try { tok = await res.json(); } catch (e) { showErr("Malformed token response."); return; }
+    const access = tok.access_token || tok.id_token;
+    if (!access) { showErr("No access token in the sign-in response."); return; }
+    token = access;
+    try { sessionStorage.setItem(TKEY, token); } catch (e) {}
+    connect();
   }
 
   async function connect() {
@@ -462,6 +536,7 @@
   });
 
   $("connect").addEventListener("click", connect);
+  $("sso").addEventListener("click", ssoLogin);
   $("signout").addEventListener("click", signout);
   $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
   $("cSend").addEventListener("click", consoleSend);
@@ -471,11 +546,19 @@
   $("olName").addEventListener("keydown", (e) => { if (e.key === "Enter") ollamaPull(); });
 
   // Boot: demo connects immediately; a stored token auto-connects.
-  if (DEMO) { connect(); }
-  else if (token) { connect(); }
+  if (params.get("code") && params.get("state")) {
+    // Returning from the identity provider — finish the OIDC code exchange.
+    completeSso();
+  } else {
+    loadAuthConfig();
+    if (DEMO) { connect(); }
+    else if (token) { connect(); }
+  }
 
   // --- Demo data -----------------------------------------------------------
   function demo(path) {
+    if (path === "/api/auth")
+      return Promise.resolve({ status: 200, ok: true, data: { token_auth: true, oidc: null } });
     if (path === "/api/info")
       return Promise.resolve({ status: 200, ok: true, data: {
         service: "rebekah-gateway", expose: ["weftmark", "opencode", "ollama"],

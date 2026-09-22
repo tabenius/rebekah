@@ -42,6 +42,7 @@ import ssl
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 # --- configuration (runtime env only; no secrets baked into the image) -------
 
@@ -84,6 +85,14 @@ class Config:
         self.oidc_allowed_subjects = set(
             env.get("REBEKAH_OIDC_ALLOWED_SUBJECTS", "").split()
         )
+
+        # Browser sign-in (OIDC Authorization Code + PKCE, public client). When a
+        # client id is set the console shows a "Sign in with SSO" button and runs
+        # the whole flow in the browser; the resulting access token is used as the
+        # bearer, verified by the OIDC scheme above. No client secret is held.
+        self.oidc_client_id = env.get("REBEKAH_OIDC_CLIENT_ID", "").strip()
+        self.oidc_scope = env.get("REBEKAH_OIDC_SCOPE", "openid profile email").strip()
+        self.oidc_login_extra = env.get("REBEKAH_OIDC_LOGIN_EXTRA", "").strip()
 
         # Which backends are reachable through the gateway. WeftMark (the
         # coordination / evidence / review board -- the "kanban" surface) is the
@@ -128,6 +137,19 @@ class Config:
     @property
     def oidc_enabled(self):
         return bool(self.oidc_issuer and self.oidc_audience)
+
+    @property
+    def oidc_login_enabled(self):
+        # Browser sign-in needs an issuer to discover and a public client id.
+        return bool(self.oidc_issuer and self.oidc_client_id)
+
+    def issuer_origin(self):
+        # scheme://host[:port] of the issuer, for the console's CSP connect-src
+        # (the browser fetches the issuer's discovery + token endpoints).
+        parts = urlsplit(self.oidc_issuer)
+        if parts.scheme and parts.netloc:
+            return "%s://%s" % (parts.scheme, parts.netloc)
+        return ""
 
     @property
     def token_enabled(self):
@@ -285,18 +307,50 @@ def make_handler(cfg, auth):
                 "application/javascript", "application/json",
             ):
                 ctype += "; charset=utf-8"
+            # The browser OIDC flow fetches the issuer's discovery + token
+            # endpoints, so connect-src must allow the issuer origin (only when
+            # sign-in is configured; otherwise it stays strictly 'self').
+            connect = "'self'"
+            if cfg.oidc_login_enabled:
+                origin = cfg.issuer_origin()
+                if origin:
+                    connect += " " + origin
             headers = [
                 ("Content-Type", ctype),
                 ("X-Content-Type-Options", "nosniff"),
                 ("Referrer-Policy", "no-referrer"),
                 ("Content-Security-Policy",
-                 "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                 "default-src 'self'; connect-src %s; img-src 'self' data:; "
                  "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
-                 "base-uri 'none'; frame-ancestors 'none'"),
+                 "base-uri 'none'; frame-ancestors 'none'" % connect),
             ]
             self._write_head(200, headers, len(payload))
             if self.command != "HEAD":
                 self.wfile.write(payload)
+
+        def _serve_auth(self):
+            # Unauthenticated: the console needs the public sign-in parameters
+            # (issuer, client id, scope) BEFORE it has a credential. These are
+            # not secrets -- every OIDC single-page app ships them. No token,
+            # audience-verification key, or backend list is revealed here.
+            oidc = None
+            if cfg.oidc_login_enabled:
+                oidc = {
+                    "issuer": cfg.oidc_issuer,
+                    "client_id": cfg.oidc_client_id,
+                    "scope": cfg.oidc_scope,
+                    "login_extra": cfg.oidc_login_extra,
+                }
+            body = json.dumps({
+                "token_auth": cfg.token_enabled,
+                "oidc": oidc,
+            }).encode()
+            self._write_head(200, [
+                ("Content-Type", "application/json; charset=utf-8"),
+                ("Cache-Control", "no-store"),
+            ], len(body))
+            if self.command != "HEAD":
+                self.wfile.write(body)
 
         def _serve_info(self):
             principal = auth.principal(self.headers.get("Authorization"))
@@ -342,6 +396,9 @@ def make_handler(cfg, auth):
                     self._serve_ui(raw_path[len("/ui/"):])
                     return
 
+            if raw_path in ("/api/auth", "/api/auth/"):
+                self._serve_auth()
+                return
             if raw_path in ("/api/info", "/api/info/"):
                 self._serve_info()
                 return

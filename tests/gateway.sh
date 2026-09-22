@@ -178,6 +178,30 @@ else
   pass "Ephor API remains opt-in"
 fi
 
+# === 2c. OIDC browser sign-in advertisement ================================
+printf '\n== OIDC browser sign-in (/api/auth) ==\n'
+# Unauthenticated, and reports no SSO when sign-in isn't configured.
+authj="$(body "$base/api/auth")"
+printf '%s' "$authj" | grep -qE '"oidc": *null' \
+  && pass "/api/auth is unauthenticated and reports no SSO when unconfigured" \
+  || fail "/api/auth oidc not null: $authj"
+
+# With an issuer + client id, /api/auth advertises the public sign-in params and
+# the console's CSP opens the issuer origin for the browser flow's fetches.
+li_port="$(free_port)"
+REBEKAH_GATEWAY_PORT="$li_port" REBEKAH_GATEWAY_TOKEN="$token" \
+  REBEKAH_OIDC_ISSUER="https://idp.example.org" REBEKAH_OIDC_CLIENT_ID="rebekah-console" \
+  REBEKAH_GATEWAY_UI_DIR="$repo_root/nix/ui" \
+  "$python" "$gateway" >"$work/gwl.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$li_port/healthz" || fail "oidc-login gateway did not start"
+lauth="$(body "http://127.0.0.1:$li_port/api/auth")"
+printf '%s' "$lauth" | grep -qE '"client_id": *"rebekah-console"' \
+  && pass "/api/auth advertises the SSO client_id" || fail "/api/auth missing client_id: $lauth"
+csp="$(curl -sI --max-time 5 "http://127.0.0.1:$li_port/ui/" | tr -d '\r' | grep -i '^content-security-policy:')"
+printf '%s' "$csp" | grep -q 'https://idp.example.org' \
+  && pass "console CSP opens the issuer origin" || fail "CSP missing issuer origin: $csp"
+
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'
 if ! "$python" -c 'import jwt, cryptography' >/dev/null 2>&1; then
