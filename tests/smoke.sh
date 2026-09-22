@@ -6,21 +6,9 @@ image="${REBEKAH_IMAGE:-rebekah:latest}"
 runtime="${CONTAINER_RUNTIME:-docker}"
 name="rebekah-smoke-$BASHPID"
 fixture="$(mktemp -d)"
-# Scratch dir kept OUTSIDE the fixture: the fixture is bind-mounted as the
-# container's /workspace, and WeftMark's evidence run requires a clean git
-# worktree. Any host-side scratch file (e.g. the mock port file) written into
-# the fixture would appear as an untracked file and make the governance
-# evidence step fail with "requires a clean worktree".
-scratch="$(mktemp -d)"
-mock_pid=""
-
 cleanup() {
-  if [[ -n "$mock_pid" ]]; then
-    kill "$mock_pid" >/dev/null 2>&1 || true
-    wait "$mock_pid" 2>/dev/null || true
-  fi
   "$runtime" rm -f "$name" >/dev/null 2>&1 || true
-  rm -rf -- "$fixture" "$scratch"
+  rm -rf -- "$fixture"
 }
 trap cleanup EXIT INT TERM
 
@@ -32,15 +20,6 @@ git -C "$fixture" add README.md
 git -C "$fixture" commit -qm "fixture"
 chmod -R a+rwX "$fixture"
 
-port_file="$scratch/ephor-port"
-EPHOR_MOCK_HOST=0.0.0.0 python3 "$repo_root/tests/ephor-mock.py" pass "$port_file" &
-mock_pid="$!"
-for _ in $(seq 1 50); do
-  [[ -s "$port_file" ]] && break
-  sleep 0.1
-done
-[[ -s "$port_file" ]]
-ephor_port="$(cat "$port_file")"
 
 "$runtime" run --rm -v "$fixture:/workspace" "$image" doctor
 
@@ -52,8 +31,7 @@ ephor_port="$(cat "$port_file")"
 # test this way guards the minimal set against regressions.
 "$runtime" run -d \
   --name "$name" \
-  --add-host host.docker.internal:host-gateway \
-  --read-only \
+   --read-only \
   --cap-drop=ALL \
   --cap-add=CHOWN --cap-add=DAC_OVERRIDE \
   --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
@@ -77,20 +55,22 @@ for _ in $(seq 1 90); do
       changeset create smoke-change-set \
       --goal "Verify governed Rebekah integration" --scope "contract:governance"
     "$runtime" exec \
-      -e EPHOR_URL="http://host.docker.internal:$ephor_port" \
       -e EPHOR_POLICY_REVISION=smoke-v0 \
       "$name" rebekah-govern |
       jq -e '.ready == true and .evidence.evidence.state == "passed"' >/dev/null
     # Containment invariant: a service UID must not be able to read another
     # service's state directory (0750, per-service group). opencode (10002)
-    # must be denied the weftmark (10004) and ollama (10001) state dirs, while
+    # must be denied the weftmark (10004), ollama (10001), and Ephor (10006)
+    # state dirs, while
     # weftmark can still read its own.
     if "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/weftmark >/dev/null 2>&1 \
-      || "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/ollama >/dev/null 2>&1; then
+      || "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/ollama >/dev/null 2>&1 \
+      || "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/ephor >/dev/null 2>&1; then
       printf 'failed: cross-service state directory is readable (isolation broken)\n' >&2
       exit 1
     fi
-    if ! "$runtime" exec --user 10004:10004 "$name" ls /var/lib/rebekah/weftmark >/dev/null 2>&1; then
+    if ! "$runtime" exec --user 10004:10004 "$name" ls /var/lib/rebekah/weftmark >/dev/null 2>&1 \
+      || ! "$runtime" exec --user 10006:10006 "$name" ls /var/lib/rebekah/ephor >/dev/null 2>&1; then
       printf 'failed: service cannot read its own state directory\n' >&2
       exit 1
     fi
@@ -154,7 +134,7 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
-    printf 'ok: core services, governed WeftMark evidence, service isolation, authenticated gateway, and web console are healthy\n'
+    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, and web console are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then
