@@ -1,5 +1,5 @@
 { dockerTools, bash, coreutils, curl, findutils, git, gnugrep, jq, ollama
-, opencode, procps, python3, tini, util-linux, weftmark, sylvae }:
+, ephor, opencode, procps, python3, tini, util-linux, weftmark, sylvae }:
 
 let
   # The gateway runs on its own Python with PyJWT + cryptography for OIDC JWT
@@ -12,7 +12,7 @@ dockerTools.buildLayeredImage {
   tag = "latest";
 
   contents = [
-    bash coreutils curl findutils git gnugrep jq ollama opencode procps sylvae
+    bash coreutils curl ephor findutils git gnugrep jq ollama opencode procps sylvae
     tini util-linux weftmark dockerTools.caCertificates
   ];
 
@@ -27,6 +27,7 @@ dockerTools.buildLayeredImage {
       var/lib/rebekah/sylvae/runs \
       var/lib/rebekah/sylvae/skills \
       var/lib/rebekah/weftmark \
+      var/lib/rebekah/ephor \
       workspace
 
     # Each service gets its own primary group (gid == uid) so a 0750 state
@@ -41,6 +42,7 @@ dockerTools.buildLayeredImage {
       'sylvae:x:10003:10003:Sylvae service:/var/lib/rebekah/sylvae:/sbin/nologin' \
       'weftmark:x:10004:10004:WeftMark service:/var/lib/rebekah/weftmark:/sbin/nologin' \
       'gateway:x:10005:10005:Rebekah API gateway:/var/lib/rebekah:/sbin/nologin' \
+      'ephor:x:10006:10006:Ephor governance service:/var/lib/rebekah/ephor:/sbin/nologin' \
       > etc/passwd
     printf '%s\n' \
       'root:x:0:' \
@@ -50,6 +52,7 @@ dockerTools.buildLayeredImage {
       'sylvae:x:10003:' \
       'weftmark:x:10004:' \
       'gateway:x:10005:' \
+      'ephor:x:10006:' \
       > etc/group
 
     chmod 0750 var/lib/rebekah/*
@@ -93,6 +96,9 @@ dockerTools.buildLayeredImage {
       "SYLVAE_PORT=8971"
       "WEFTMARK_HOST=127.0.0.1"
       "WEFTMARK_PORT=8765"
+      "EPHOR_URL=http://127.0.0.1:9800"
+      "EPHOR_HOST=127.0.0.1"
+      "EPHOR_PORT=9800"
       # API gateway: loopback by default; set REBEKAH_GATEWAY_HOST + TLS to
       # expose it on the LAN. Exposes only WeftMark until told otherwise.
       "REBEKAH_GATEWAY_ENABLE=1"
