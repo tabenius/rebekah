@@ -186,7 +186,7 @@ A governed unit of work must remain traceable across participating services:
 | Sylvae | `run_id` |
 | Ephor/KAGP | `entry_id` and `chain_hash` |
 
-Ephor governance decisions enter WeftMark as typed `governance` evidence
+Ephor governance decisions enter WeftMark as typed `security:governance` evidence
 (record kind `ephor:governance`). Ephor supplies the policy decision
 and tamper-evident chain reference; WeftMark remains responsible for deciding
 whether a Change Set is `READY`.
@@ -336,7 +336,7 @@ unavailable-service, and missing-configuration paths.
 
 **Governance attachment complete.** `rebekah-govern` attaches the connector
 output through WeftMark's real evidence interface as dedicated
-`governance` evidence, requires it for the review decision, and the
+`security:governance` evidence, requires it for the review decision, and the
 smoke test proves the readiness effect. See
 [docs/ephor-governance-worker.md](docs/ephor-governance-worker.md) for the
 merged reference implementation the connector calls into.
