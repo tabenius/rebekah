@@ -209,7 +209,7 @@
 (function () {
   "use strict";
   const params = new URLSearchParams(location.search);
-  const DEMO = params.has("demo") || location.protocol === "file:";
+  const DEMO = params.has("demo") || location.hash === "#demo" || location.protocol === "file:";
   const TKEY = "rebekah.token";
   const HEALTH = {
     weftmark: "/weftmark/healthz", opencode: "/opencode/global/health",
