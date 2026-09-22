@@ -144,6 +144,12 @@ base="http://127.0.0.1:$gw_port"
 ui_body="$(body "$base/ui/")"
 printf '%s' "$ui_body" | grep -q "Rebekah Console" \
   && pass "/ui/ serves the console HTML" || fail "/ui/ missing console markup"
+printf '%s' "$ui_body" | grep -q 'role="tabpanel"' \
+  && pass "console exposes accessible tab panels" || fail "console missing tabpanel semantics"
+printf '%s' "$ui_body" | grep -q '>Advanced<' \
+  && pass "raw API tools are under Advanced" || fail "console missing Advanced navigation"
+printf '%s' "$ui_body" | grep -q 'optional governance integration' \
+  && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \
   && pass "console served as text/html" || fail "console content-type wrong"
 
