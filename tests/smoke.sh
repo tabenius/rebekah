@@ -49,6 +49,13 @@ for _ in $(seq 1 90); do
     # the SIGPIPE'd rebekah-doctor (exit 141) then fails the script racily.
     doctor_out="$("$runtime" exec "$name" rebekah-doctor)"
     grep -q 'correlation/change_set_id=smoke-change-set' <<<"$doctor_out"
+    # Out-of-box model contract: OpenCode and Sylvae share the same local
+    # Ollama model. The smoke image carries no weights, so assert configuration
+    # here; v-BAZ separately tests cached/pulled model provisioning.
+    "$runtime" exec "$name" jq -e \
+      '.model == "ollama/qwen2.5:0.5b" and .small_model == "ollama/qwen2.5:0.5b" and
+       .provider.ollama.options.baseURL == "http://127.0.0.1:11434/v1"' \
+      /var/lib/rebekah/opencode/config/opencode/opencode.json >/dev/null
     "$runtime" exec "$name" weftmark \
       --repo /workspace --ledger /var/lib/rebekah/weftmark/ledger.jsonl \
       changeset create smoke-change-set \
