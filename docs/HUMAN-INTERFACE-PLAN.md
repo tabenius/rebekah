@@ -825,3 +825,11 @@ The smallest slice that materially improves the suite is:
 
 This slice reuses the current gateway, console, WeftMark projection, and service
 APIs. It does not require a frontend framework, a CDN, or a new source of truth.
+
+For the Change Set detail (item 6), the keyboard work (item 9), and — when they
+are picked back up — passkey auth and mutating `/api/v1` routes with
+optimistic concurrency, see the concepts and HTTP contracts distilled from the
+RAGBAZ kanban sketch in
+[`UI-INSPIRATION-RAGBAZ-KANBAN.md`](UI-INSPIRATION-RAGBAZ-KANBAN.md). It is a
+design reference only; its adoption boundaries (no framework/CDN, `textContent`
+rendering, fail-closed gateway) are recorded there.
