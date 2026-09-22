@@ -1,0 +1,13 @@
+name: Prefetch dependency pin
+on:
+  push:
+    branches: [codex/update-integrations]
+permissions:
+  contents: read
+jobs:
+  prefetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Prefetch WeftMark
+        run: nix flake prefetch github:tabenius/WeftMark/48bdc25accaf6e68914db6d4efabc8d23b60320f
