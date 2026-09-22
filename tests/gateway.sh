@@ -228,6 +228,13 @@ has 'id="csDialog"' \
   && pass "console ships a Change Set detail dialog" || fail "console missing change-set dialog"
 has '/api/v1/change-sets/' \
   && pass "console opens change sets via the versioned API" || fail "console does not call change-set detail"
+if has '>Work<' && has '>Review<' && has '>Runs<'; then
+  pass "primary nav uses goal labels (Work/Review/Runs)"
+else
+  fail "console nav not renamed to goal labels"
+fi
+has 'id="laneFilter"' \
+  && pass "board offers a mobile lane filter" || fail "console missing mobile lane filter"
 has 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \

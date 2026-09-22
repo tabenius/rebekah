@@ -68,6 +68,10 @@
   .lane[data-lane="ready"] h3 { border-left-color: var(--lane-ready); }
   .lane[data-lane="done"] h3 { border-left-color: var(--lane-done); }
   .cards { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .board.list-view { display: flex; flex-direction: column; gap: 8px; }
+  .board.list-view .card { max-width: 640px; }
+  .board-filter { display: none; }
+  @media (max-width: 640px) { .board-filter { display: flex; } }
   .card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; }
   .card .t { font-weight: 600; }
   .card .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
@@ -173,15 +177,15 @@
   <div class="banner hidden" id="err" role="alert" aria-live="assertive"></div>
 
   <div class="tabs" role="tablist" aria-label="Rebekah console">
-    <div class="tab" id="tab-attention" role="tab" aria-controls="panel-attention" aria-selected="true" tabindex="0">Attention</div>
-    <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="false" tabindex="-1">Work</div>
-    <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Sessions</div>
+    <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="true" tabindex="0">Work</div>
+    <div class="tab" id="tab-attention" role="tab" aria-controls="panel-attention" aria-selected="false" tabindex="-1">Review</div>
+    <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Runs</div>
     <div class="tab hidden" id="tab-ollama" role="tab" aria-controls="panel-ollama" aria-selected="false" tabindex="-1">Models</div>
     <div class="tab" id="tab-services" role="tab" aria-controls="panel-services" aria-selected="false" tabindex="-1">System</div>
     <div class="tab" id="tab-console" role="tab" aria-controls="panel-console" aria-selected="false" tabindex="-1">Advanced</div>
   </div>
 
-  <section id="panel-attention" role="tabpanel" aria-labelledby="tab-attention" tabindex="0">
+  <section id="panel-attention" class="hidden" role="tabpanel" aria-labelledby="tab-attention" tabindex="0">
     <div class="rowbar">
       <h2 style="margin:0;font-size:16px">What needs attention?</h2>
       <span class="grow"></span>
@@ -191,7 +195,13 @@
     <div class="list" id="attList"><div class="empty">Connect to load the attention inbox.</div></div>
   </section>
 
-  <section id="panel-board" class="hidden" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
+  <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
+    <div class="rowbar board-filter" id="boardFilter">
+      <label for="laneFilter">Lane</label>
+      <select id="laneFilter" aria-label="Filter by lane">
+        <option value="">All lanes</option>
+      </select>
+    </div>
     <div class="empty" id="boardHint">Connect to load the WeftMark coordination board.</div>
     <div class="board hidden" id="board"></div>
   </section>
@@ -224,7 +234,7 @@
     <div class="rowbar">
       <button id="ocRefresh" class="ghost">Refresh</button>
       <span class="status" id="ocCount"></span>
-      <span class="status">Inspect the OpenAPI spec via the API console: <code class="k">GET /doc</code>.</span>
+      <span class="status">OpenCode sessions. Sylvae skill runs will join this stream once exposed. Inspect the OpenAPI spec via the API console: <code class="k">GET /doc</code>.</span>
     </div>
     <div class="list" id="ocList"><div class="empty">Loading sessions…</div></div>
   </section>
@@ -370,6 +380,7 @@
     $("token").value = "";
     setConnected(false);
     $("board").classList.add("hidden");
+    $("board").textContent = ""; lastBoardData = null;
     $("boardHint").classList.remove("hidden");
     $("attList").textContent = "";
     $("attList").appendChild(el("div", "empty", "Connect to load the attention inbox."));
@@ -378,7 +389,7 @@
     $("sysState").textContent = "◌ checking services…"; $("sysState").style.color = "";
     $("tab-opencode").classList.add("hidden");
     $("tab-ollama").classList.add("hidden");
-    selectTab("attention");
+    selectTab("board");
   }
 
   // --- helpers -------------------------------------------------------------
@@ -545,11 +556,30 @@
     return out;
   }
 
+  let lastBoardData = null;
+  const mqNarrow = window.matchMedia("(max-width: 640px)");
+
+  // Mobile (§14.7): a single sorted list with a lane filter, attention-first;
+  // desktop keeps the five lanes. Re-render on breakpoint or filter change.
+  function renderBoardList(data) {
+    const board = $("board");
+    board.classList.add("list-view");
+    const sel = $("laneFilter").value;
+    const all = [];
+    LANES.forEach((lane) => { if (!sel || sel === lane) laneCards(data, lane).forEach((c) => all.push(c)); });
+    all.sort((a, b) => ((b.attention || []).length > 0) - ((a.attention || []).length > 0));
+    if (!all.length) { board.appendChild(el("div", "empty", "No cards" + (sel ? " in " + sel : "") + ".")); return; }
+    all.forEach((c) => board.appendChild(card(c)));
+  }
+
   function renderBoard(data) {
+    lastBoardData = data;
     const board = $("board");
     board.textContent = "";
     $("boardHint").classList.add("hidden");
     board.classList.remove("hidden");
+    if (mqNarrow.matches) { renderBoardList(data); return; }
+    board.classList.remove("list-view");
     LANES.forEach((lane) => {
       const items = laneCards(data, lane);
       const laneEl = el("div", "lane"); laneEl.setAttribute("data-lane", lane);
@@ -870,6 +900,12 @@
     if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
     lastFocus = null;
   });
+  LANES.forEach((lane) => {
+    const o = document.createElement("option"); o.value = lane; o.textContent = lane;
+    $("laneFilter").appendChild(o);
+  });
+  $("laneFilter").addEventListener("change", () => { if (lastBoardData) renderBoard(lastBoardData); });
+  mqNarrow.addEventListener("change", () => { if (lastBoardData) renderBoard(lastBoardData); });
   $("cSend").addEventListener("click", consoleSend);
   $("ocRefresh").addEventListener("click", loadOpencode);
   $("olRefresh").addEventListener("click", loadOllama);
