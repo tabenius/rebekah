@@ -64,6 +64,11 @@ def _split_hostport(value, default_port):
     return host or "127.0.0.1", int(port) if port else default_port
 
 
+def _iso_now():
+    # RFC 3339 / ISO 8601 UTC, for the versioned API's observed_at field.
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 class Config:
     def __init__(self, env=None):
         env = os.environ if env is None else env
@@ -455,6 +460,129 @@ def make_handler(cfg, auth):
                 "token_auth": cfg.token_enabled,
             })
 
+        def _authed(self):
+            principal = auth.principal(self.headers.get("Authorization"))
+            if principal is None:
+                self._fail(
+                    401, "unauthorized",
+                    extra_headers=[("WWW-Authenticate", 'Bearer realm="rebekah"')],
+                )
+                return None
+            return principal
+
+        def _backend_get_json(self, name, path):
+            # Internal GET to a loopback backend (auth injected as the proxy does),
+            # for the aggregation endpoints. Returns parsed JSON or None on any
+            # failure -- the caller degrades to a "stale" result, never an error.
+            backend = cfg.backends.get(name)
+            if backend is None:
+                return None
+            host, port, upstream_auth = backend
+            headers = {"Host": "%s:%d" % (host, port)}
+            if upstream_auth is not None:
+                user, pw = upstream_auth
+                headers["Authorization"] = "Basic " + base64.b64encode(
+                    ("%s:%s" % (user, pw)).encode()).decode()
+            conn = None
+            try:
+                conn = http.client.HTTPConnection(host, port, timeout=min(cfg.timeout, 5))
+                conn.request("GET", path, headers=headers)
+                resp = conn.getresponse()
+                raw = resp.read()
+                if resp.status != 200:
+                    return None
+                return json.loads(raw)
+            except Exception:  # noqa: BLE001 -- degrade, never leak
+                return None
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        # --- versioned aggregation API (docs/HUMAN-INTERFACE-PLAN.md §10) -----
+        # The console consumes these instead of reverse-engineering each backend.
+        # Every response carries a schema version, source, and observed_at.
+
+        def _serve_v1_session(self):
+            principal = self._authed()
+            if principal is None:
+                return
+            scheme, _, name = principal.partition(":")
+            # Single-tenant projection: the gateway does not yet enforce
+            # sub-capabilities -- every authenticated request is allowed -- so the
+            # effective capability set is the full one. This is an interface
+            # projection (plan §5.2); tighten it as server-side authz lands.
+            self._json(200, {
+                "schema": "rebekah.session.v1",
+                "observed_at": _iso_now(),
+                "source": "rebekah-gateway",
+                "principal": name or scheme,
+                "auth": scheme,
+                "profile": "administrator",
+                "capabilities": ["observe", "review", "operate", "administer"],
+            })
+
+        def _serve_v1_system(self):
+            if self._authed() is None:
+                return
+            schemes = []
+            if cfg.token_enabled:
+                schemes.append("token")
+            if auth.password_active:
+                schemes.append("password")
+            if cfg.oidc_enabled:
+                schemes.append("oidc")
+            backends = {nm: {"route": "/" + nm + "/"} for nm in sorted(cfg.backends)}
+            self._json(200, {
+                "schema": "rebekah.system.v1",
+                "observed_at": _iso_now(),
+                "source": "rebekah-gateway",
+                "service": "rebekah-gateway",
+                "auth": schemes,
+                "ui": cfg.ui_enabled,
+                "backends": backends,
+                # Ephor is optional: present it as installed-or-not, never as a
+                # failed baseline service (plan §1, §6.8).
+                "ephor": {"exposed": "ephor" in cfg.backends, "optional": True},
+            })
+
+        def _serve_v1_attention(self):
+            if self._authed() is None:
+                return
+            items = []
+            stale = False
+            data = self._backend_get_json("weftmark", "/v0/kanban") \
+                if "weftmark" in cfg.backends else None
+            if not isinstance(data, dict):
+                stale = True
+            else:
+                for card in (data.get("cards") or []):
+                    for reason in (card.get("attention") or []):
+                        items.append({
+                            "id": card.get("id"), "kind": "change_set",
+                            "title": card.get("title") or card.get("id"),
+                            "lane": card.get("lane"), "reason": reason,
+                            "change_set": card.get("id"), "source": "weftmark",
+                        })
+                for card in (data.get("plan_cards") or []):
+                    for reason in (card.get("attention") or []):
+                        items.append({
+                            "id": card.get("id"), "kind": "task",
+                            "title": card.get("title") or card.get("id"),
+                            "lane": card.get("lane"), "reason": reason,
+                            "source": "weftmark",
+                        })
+            self._json(200, {
+                "schema": "rebekah.attention.v1",
+                "observed_at": _iso_now(),
+                "source": "rebekah-gateway",
+                "count": len(items),
+                "stale": stale,
+                "items": items,
+            })
+
         def _serve_login(self):
             if self.command != "POST":
                 self._fail(405, "method not allowed")
@@ -540,6 +668,15 @@ def make_handler(cfg, auth):
                 return
             if raw_path in ("/api/logout", "/api/logout/"):
                 self._serve_logout()
+                return
+            if raw_path in ("/api/v1/session", "/api/v1/session/"):
+                self._serve_v1_session()
+                return
+            if raw_path in ("/api/v1/system", "/api/v1/system/"):
+                self._serve_v1_system()
+                return
+            if raw_path in ("/api/v1/attention", "/api/v1/attention/"):
+                self._serve_v1_attention()
                 return
             if raw_path in ("/api/info", "/api/info/"):
                 self._serve_info()

@@ -59,6 +59,44 @@ PY
   pids+=("$!")
 }
 
+# Mock WeftMark: serves a kanban projection so we can assert the gateway's
+# /api/v1/attention aggregation. /healthz lets wait_url probe it.
+start_kanban() {
+  local port="$1"
+  "$python" - "$port" <<'PY' &
+import json, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+port = int(sys.argv[1])
+KANBAN = {
+    "schema": "weftmark.kanban-projection.v0",
+    "cards": [
+        {"kind": "change_set", "id": "cs-1", "title": "Add gateway",
+         "lane": "review", "attention": ["dirty_worktree"]},
+        {"kind": "change_set", "id": "cs-2", "title": "Quiet one",
+         "lane": "active", "attention": []},
+    ],
+    "plan_cards": [
+        {"kind": "task", "id": "t-9", "title": "Wire API",
+         "lane": "backlog", "attention": ["blocked"]},
+    ],
+}
+class H(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    def do_GET(self):
+        if self.path.split("?", 1)[0] == "/v0/kanban":
+            body = json.dumps(KANBAN).encode()
+        else:
+            body = b"UPSTREAM path=%s" % self.path.encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+PY
+  pids+=("$!")
+}
+
 wait_url() {
   local url="$1" _
   for _ in $(seq 1 50); do
@@ -226,6 +264,69 @@ sess="$(printf '%s' "$lt" | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p')"
 code -X POST -H "Authorization: Bearer $sess" "$pbase/api/logout" >/dev/null
 [ "$(code -H "Authorization: Bearer $sess" "$pbase/api/info")" = 401 ] \
   && pass "logout revokes the session" || fail "session still valid after logout"
+
+# === 2e. versioned aggregation API (/api/v1/*) =============================
+printf '\n== versioned aggregation API ==\n'
+kb_port="$(free_port)"; v1_port="$(free_port)"
+start_kanban "$kb_port"
+wait_url "http://127.0.0.1:$kb_port/v0/kanban" || fail "kanban mock did not start"
+
+v1tok="v1tok-$(date +%s)"
+REBEKAH_GATEWAY_PORT="$v1_port" REBEKAH_GATEWAY_TOKEN="$v1tok" \
+  REBEKAH_GATEWAY_EXPOSE="weftmark" \
+  WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$kb_port" \
+  "$python" "$gateway" >"$work/gwv1.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$v1_port/healthz" || fail "v1 gateway did not start"
+vbase="http://127.0.0.1:$v1_port"
+auth_hdr="Authorization: Bearer $v1tok"
+
+# Every /api/v1/* endpoint is authenticated (no open aggregation surface).
+for ep in session system attention; do
+  [ "$(code "$vbase/api/v1/$ep")" = 401 ] \
+    && pass "/api/v1/$ep requires auth" || fail "/api/v1/$ep not 401 unauth"
+done
+
+sess="$(body -H "$auth_hdr" "$vbase/api/v1/session")"
+printf '%s' "$sess" | grep -q '"schema": "rebekah.session.v1"' \
+  && pass "/api/v1/session carries its schema" || fail "session schema wrong: $sess"
+printf '%s' "$sess" | grep -q '"profile": "administrator"' \
+  && pass "/api/v1/session reports a role profile" || fail "no profile: $sess"
+printf '%s' "$sess" | grep -q '"observed_at"' \
+  && pass "/api/v1/session is timestamped" || fail "no observed_at: $sess"
+
+sys="$(body -H "$auth_hdr" "$vbase/api/v1/system")"
+printf '%s' "$sys" | grep -q '"schema": "rebekah.system.v1"' \
+  && pass "/api/v1/system carries its schema" || fail "system schema wrong: $sys"
+printf '%s' "$sys" | grep -q '"weftmark"' \
+  && pass "/api/v1/system lists exposed backends" || fail "no backends: $sys"
+printf '%s' "$sys" | grep -q '"optional": true' \
+  && pass "/api/v1/system marks Ephor optional" || fail "ephor not optional: $sys"
+
+att="$(body -H "$auth_hdr" "$vbase/api/v1/attention")"
+printf '%s' "$att" | grep -q '"schema": "rebekah.attention.v1"' \
+  && pass "/api/v1/attention carries its schema" || fail "attention schema wrong: $att"
+printf '%s' "$att" | grep -q '"dirty_worktree"' \
+  && pass "/api/v1/attention aggregates change-set reasons" || fail "no cs reason: $att"
+printf '%s' "$att" | grep -q '"blocked"' \
+  && pass "/api/v1/attention aggregates task reasons" || fail "no task reason: $att"
+printf '%s' "$att" | grep -qE '"count": *2' \
+  && pass "/api/v1/attention counts only cards needing attention" || fail "wrong count: $att"
+printf '%s' "$att" | grep -qE '"stale": *false' \
+  && pass "/api/v1/attention is fresh when the backend answers" || fail "unexpected stale: $att"
+
+# When WeftMark is unreachable, attention degrades to stale (never a 5xx).
+stale_port="$(free_port)"
+REBEKAH_GATEWAY_PORT="$stale_port" REBEKAH_GATEWAY_TOKEN="$v1tok" \
+  REBEKAH_GATEWAY_EXPOSE="weftmark" \
+  WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$(free_port)" \
+  "$python" "$gateway" >"$work/gwv1s.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$stale_port/healthz" || fail "stale-case gateway did not start"
+sres="$(code -H "$auth_hdr" "http://127.0.0.1:$stale_port/api/v1/attention")"
+sbody="$(body -H "$auth_hdr" "http://127.0.0.1:$stale_port/api/v1/attention")"
+[ "$sres" = 200 ] && printf '%s' "$sbody" | grep -qE '"stale": *true' \
+  && pass "/api/v1/attention degrades to stale, not 5xx" || fail "no graceful degrade: $sres $sbody"
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'
