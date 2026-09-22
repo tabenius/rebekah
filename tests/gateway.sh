@@ -235,6 +235,14 @@ else
 fi
 has 'id="laneFilter"' \
   && pass "board offers a mobile lane filter" || fail "console missing mobile lane filter"
+has 'id="remember"' && has 'memory-only' \
+  && pass "tokens are memory-only unless remembered for the tab" || fail "console missing remember-for-tab consent"
+has 'id="authPosture"' \
+  && pass "connection dialog explains the connection posture" || fail "console missing connection posture"
+has 'class="skip"' && has 'href="#main"' \
+  && pass "console has a skip link to main content" || fail "console missing skip link"
+has 'prefers-reduced-motion' \
+  && pass "console honors reduced motion" || fail "console missing reduced-motion support"
 has 'optional governance integration' \
   && pass "Ephor is presented as optional" || fail "console does not mark Ephor optional"
 curl -sI --max-time 5 "$base/ui/" | grep -qi 'content-type: text/html' \

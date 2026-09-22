@@ -127,9 +127,20 @@
   .optional { border-style: dashed; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after {
     scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+  .skip { position: absolute; left: -9999px; top: 0; z-index: 10; background: var(--accent);
+    color: #fff; padding: 8px 12px; border-radius: 0 0 var(--radius) 0; }
+  .skip:focus { left: 0; }
+  .remember { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+  .remember input { width: auto; }
+  /* Comfortable tap targets on touch/narrow screens (WCAG 2.2 AA 44x44). */
+  @media (max-width: 640px) {
+    button, .tab, select, #laneFilter { min-height: 44px; }
+    .openable { min-height: 44px; }
+  }
 </style>
 </head>
 <body>
+<a href="#main" class="skip">Skip to main content</a>
 <header>
   <span class="brand">Rebekah <small>governed agentic runtime</small></span>
   <span class="grow"></span>
@@ -142,7 +153,8 @@
 <dialog id="authDialog" aria-labelledby="authTitle" aria-describedby="authHelp">
   <div class="dialog-body">
     <h2 id="authTitle">Connect to Rebekah</h2>
-    <p class="status" id="authHelp">Sign in with the local administrator account. Session credentials are kept only for this browser tab.</p>
+    <p class="status" id="authHelp">Sign in to reach the gateway. Credentials stay in this browser tab only.</p>
+    <p class="status" id="authPosture" role="status"></p>
     <div class="banner hidden" id="authError" role="alert" aria-live="assertive"></div>
     <div class="field hidden" id="passwordFields">
       <label for="user">Username</label>
@@ -156,6 +168,10 @@
       <input type="password" id="token" autocomplete="off" spellcheck="false">
       <button id="connect" type="button">Use token</button>
     </div>
+    <label class="remember">
+      <input type="checkbox" id="remember">
+      Remember for this tab (until it closes)
+    </label>
     <div class="dialog-actions">
       <button id="cancelAuth" class="ghost" type="button">Cancel</button>
     </div>
@@ -171,7 +187,7 @@
     <div id="csBody"><div class="empty">Loading…</div></div>
   </div>
 </dialog>
-<main>
+<main id="main">
   <div class="banner hidden" id="demoBanner">Demo preview — showing sample data. Open this
     page through a running <code class="k">rebekah-gateway</code> and connect with a token to see live state.</div>
   <div class="banner hidden" id="err" role="alert" aria-live="assertive"></div>
@@ -233,7 +249,7 @@
   <section id="panel-opencode" class="hidden" role="tabpanel" aria-labelledby="tab-opencode" tabindex="0">
     <div class="rowbar">
       <button id="ocRefresh" class="ghost">Refresh</button>
-      <span class="status" id="ocCount"></span>
+      <span class="status" id="ocCount" role="status" aria-live="polite"></span>
       <span class="status">OpenCode sessions. Sylvae skill runs will join this stream once exposed. Inspect the OpenAPI spec via the API console: <code class="k">GET /doc</code>.</span>
     </div>
     <div class="list" id="ocList"><div class="empty">Loading sessions…</div></div>
@@ -244,7 +260,7 @@
       <input type="text" id="olName" placeholder="model to pull, e.g. gemma3:e2b" spellcheck="false">
       <button id="olPull">Pull</button>
       <button id="olRefresh" class="ghost">Refresh</button>
-      <span class="status" id="olStatus"></span>
+      <span class="status" id="olStatus" role="status" aria-live="polite"></span>
     </div>
     <p class="status">Large models can exceed the gateway timeout — for off-grid installs prefer the
       pre-baked artifact cache. Small models pull fine here.</p>
@@ -284,6 +300,33 @@
     b.textContent = msg; b.classList.remove("hidden");
   };
 
+  // Bearer tokens are memory-only by default (§9). Persist to sessionStorage
+  // (tab-scoped, cleared on tab close) only with explicit "remember for this
+  // tab" consent; otherwise drop any prior copy. Never localStorage / URL.
+  function persistToken() {
+    try {
+      if ($("remember").checked && token) sessionStorage.setItem(TKEY, token);
+      else sessionStorage.removeItem(TKEY);
+    } catch (e) {}
+  }
+
+  // Explain the connection posture (local / LAN TLS / OIDC) at the decision
+  // point, per §5.1.
+  function connectionPosture() {
+    if (DEMO) return "Demo preview — no live gateway is connected.";
+    const h = location.hostname;
+    const loopback = h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "";
+    const methods = [];
+    if (authCfg && authCfg.password) methods.push("username + password");
+    if (authCfg && authCfg.token_auth) methods.push("a bearer token");
+    if (authCfg && authCfg.oidc) methods.push("OIDC");
+    const how = methods.length ? " Sign in with " + methods.join(" or ") + "." : "";
+    if (location.protocol === "https:")
+      return "Encrypted over TLS" + (loopback ? " (loopback)." : " (LAN / remote).") + how;
+    if (loopback) return "Local console on loopback (127.0.0.1), unencrypted." + how;
+    return "Warning: plain HTTP to a non-local host — the gateway refuses this without TLS." + how;
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     if (DEMO) return demo(path, opts);
@@ -312,6 +355,7 @@
     const pw = !!(authCfg && authCfg.password);
     $("passwordFields").classList.toggle("hidden", !pw);
     $("tokenFields").classList.toggle("hidden", !(authCfg && authCfg.token_auth));
+    $("authPosture").textContent = connectionPosture();
     if (!pw && !(authCfg && authCfg.token_auth)) {
       const message = "This gateway does not advertise an interactive sign-in method.";
       showErr(message);
@@ -333,7 +377,6 @@
       return;
     }
     token = r.data.token;
-    try { sessionStorage.setItem(TKEY, token); } catch (e) {}
     $("pass").value = "";
     connect();
   }
@@ -341,7 +384,7 @@
   async function connect() {
     showErr("");
     const t = $("token").value.trim();
-    if (t) { token = t; try { sessionStorage.setItem(TKEY, t); } catch (e) {} }
+    if (t) token = t;                 // memory only until verified + consented
     const r = await api("/api/info");
     if (!r.ok) {
       setConnected(false);
@@ -349,6 +392,7 @@
       return;
     }
     info = r.data;
+    persistToken();                   // persist only a verified token, and only if remembered
     setConnected(true);
     if ($("authDialog").open) $("authDialog").close();
     $("demoBanner").classList.toggle("hidden", !DEMO);
@@ -887,6 +931,14 @@
     if (authCfg && authCfg.password) $("user").focus(); else $("token").focus();
   });
   $("cancelAuth").addEventListener("click", () => $("authDialog").close());
+  // Restore focus when the connect dialog closes (§8 focus restoration): to the
+  // session control if now connected, else back to the Connect button.
+  $("authDialog").addEventListener("close", () => {
+    const target = $("signout").classList.contains("hidden") ? $("openAuth") : $("signout");
+    if (target && !target.classList.contains("hidden") && typeof target.focus === "function") target.focus();
+  });
+  // Reflect a previously remembered (tab-scoped) token in the consent checkbox.
+  try { if (sessionStorage.getItem(TKEY)) $("remember").checked = true; } catch (e) {}
   $("connect").addEventListener("click", connect);
   $("login").addEventListener("click", login);
   $("signout").addEventListener("click", signout);

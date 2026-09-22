@@ -833,3 +833,31 @@ RAGBAZ kanban sketch in
 [`UI-INSPIRATION-RAGBAZ-KANBAN.md`](UI-INSPIRATION-RAGBAZ-KANBAN.md). It is a
 design reference only; its adoption boundaries (no framework/CDN, `textContent`
 rendering, fail-closed gateway) are recorded there.
+
+### 14.1 First-slice status
+
+All ten items above are implemented and guarded by `tests/gateway.sh`:
+
+1. Ephor documented/presented as optional (runtime + `/api/v1/system` + console).
+2. `/api/v1/session`, `/api/v1/system`, `/api/v1/attention` (plus
+   `/api/v1/change-sets[/{id}]`) on `rebekah-gateway`.
+3. Header token field replaced by a connection dialog that explains the
+   local/LAN-TLS/OIDC posture; bearer tokens are memory-only unless "remember
+   for this tab" is chosen (§9).
+4. Goal-based nav: Work, Review, Runs, Models, System, Advanced.
+5. API console lives under Advanced.
+6. Change Set detail correlating WeftMark git/evidence/review/handoff/claims/
+   tasks, with OpenCode/Sylvae link slots (see
+   [`WEFTMARK-RUNTIME-LINKS-SCOPE.md`](WEFTMARK-RUNTIME-LINKS-SCOPE.md) for the
+   upstream work that fills them).
+7. Board switches to a single attention-first list with a lane filter on narrow
+   screens.
+8. Four-state service health (Ready / Needs attention / Installing / Offline)
+   with remedies, from `/api/v1/system`.
+9. Keyboard-complete tabs and dialogs (roving `tabindex`, arrow keys, focus
+   restoration), a skip link, live status/error regions, reduced-motion, and
+   44×44 touch targets.
+10. Ephor-absence coverage in `tests/gateway.sh`.
+
+The remaining human-interface work (Phase 3 correlated daily work, and the
+mutating/optimistic-concurrency and passkey slices) is out of this first slice.
