@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rebekah-gateway: the single authenticated entry point for Rebekah's API.
 
-Rebekah's four services (OpenCode, Ollama, Sylvae, WeftMark) bind loopback only
+Rebekah's five services (OpenCode, Ollama, Sylvae, WeftMark, Ephor) bind loopback only
 (security invariant #2). This gateway is the "authenticated TLS proxy" that
 invariant points at: it is the one process that may face the local network / a
 GUI / a human-in-the-loop guest, it authenticates every request, and it forwards
@@ -99,6 +99,8 @@ class Config:
         ol_host, ol_port = _split_hostport(
             env.get("OLLAMA_HOST", "127.0.0.1:11434").strip(), 11434
         )
+        ep_host = env.get("EPHOR_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        ep_port = int(env.get("EPHOR_PORT", "9800"))
         oc_pw = env.get("OPENCODE_SERVER_PASSWORD", "")
 
         catalogue = {
@@ -107,6 +109,7 @@ class Config:
                          ("opencode", oc_pw) if oc_pw else None),
             "sylvae": (sy_host, sy_port, None),
             "ollama": (ol_host, ol_port, None),
+            "ephor": (ep_host, ep_port, None),
         }
         self.backends = {name: catalogue[name] for name in exposed if name in catalogue}
         self.unknown_exposed = [name for name in exposed if name not in catalogue]
@@ -155,7 +158,7 @@ class Config:
         if not self.backends:
             problems.append(
                 "no exposed backends: set REBEKAH_GATEWAY_EXPOSE to a subset of "
-                "weftmark opencode sylvae ollama"
+                "weftmark opencode sylvae ollama ephor"
             )
         return problems
 
