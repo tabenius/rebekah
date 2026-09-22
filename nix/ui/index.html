@@ -54,8 +54,8 @@
   .banner { background: var(--chip); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 10px 12px; color: var(--muted); margin-bottom: 12px; }
   .board { display: grid; grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 12px; }
-  @media (max-width: 900px) { .board { grid-auto-flow: column; grid-auto-columns: 78%;
-    grid-template-columns: none; overflow-x: auto; } }
+  @media (max-width: 900px) { .board { grid-template-columns: 1fr; }
+    .lane { min-height: 0; } }
   .lane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     display: flex; flex-direction: column; min-height: 80px; }
   .lane h3 { margin: 0; padding: 10px 12px; font-size: 12px; text-transform: uppercase;
@@ -99,6 +99,20 @@
   .item .t { font-weight: 600; } .item .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
   .item .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .tab.hidden { display: none; }
+  .tab:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+  textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  dialog { width: min(440px, calc(100% - 32px)); border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--panel); color: var(--ink); padding: 0; }
+  dialog::backdrop { background: rgba(0, 0, 0, .58); }
+  .dialog-body { padding: 20px; }
+  .dialog-body h2 { margin: 0 0 6px; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .field { display: grid; gap: 6px; margin-top: 16px; }
+  .field label { font-weight: 600; }
+  .remedy { margin-top: 5px; color: var(--muted); font-size: 12px; }
+  .optional { border-style: dashed; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after {
+    scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
@@ -106,35 +120,49 @@
   <span class="brand">Rebekah <small>governed agentic runtime</small></span>
   <span class="grow"></span>
   <div class="authbar" id="authbar">
-    <span class="status" id="conn"><span class="dot" id="dot"></span><span id="connText">not connected</span></span>
-    <input type="password" id="token" placeholder="Bearer token" autocomplete="off" spellcheck="false">
-    <button id="connect">Connect</button>
+    <span class="status" id="conn" role="status" aria-live="polite"><span class="dot" id="dot"></span><span id="connText">not connected</span></span>
+    <button id="openAuth">Connect</button>
     <button id="signout" class="ghost hidden">Sign out</button>
   </div>
 </header>
+<dialog id="authDialog" aria-labelledby="authTitle" aria-describedby="authHelp">
+  <div class="dialog-body">
+    <h2 id="authTitle">Connect to Rebekah</h2>
+    <p class="status" id="authHelp">Enter the bearer token for this gateway. It is kept only for this browser tab.</p>
+    <div class="field">
+      <label for="token">Bearer token</label>
+      <input type="password" id="token" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="dialog-actions">
+      <button id="cancelAuth" class="ghost" type="button">Cancel</button>
+      <button id="connect" type="button">Connect</button>
+    </div>
+  </div>
+</dialog>
 <main>
   <div class="banner hidden" id="demoBanner">Demo preview — showing sample data. Open this
     page through a running <code class="k">rebekah-gateway</code> and connect with a token to see live state.</div>
-  <div class="banner hidden" id="err"></div>
+  <div class="banner hidden" id="err" role="alert" aria-live="assertive"></div>
 
-  <div class="tabs" role="tablist">
-    <div class="tab" id="tab-board" role="tab" aria-selected="true" tabindex="0">Board</div>
-    <div class="tab hidden" id="tab-opencode" role="tab" aria-selected="false" tabindex="0">OpenCode</div>
-    <div class="tab hidden" id="tab-ollama" role="tab" aria-selected="false" tabindex="0">Ollama</div>
-    <div class="tab" id="tab-services" role="tab" aria-selected="false" tabindex="0">Services</div>
-    <div class="tab" id="tab-console" role="tab" aria-selected="false" tabindex="0">API console</div>
+  <div class="tabs" role="tablist" aria-label="Rebekah console">
+    <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="true" tabindex="0">Work</div>
+    <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Sessions</div>
+    <div class="tab hidden" id="tab-ollama" role="tab" aria-controls="panel-ollama" aria-selected="false" tabindex="-1">Models</div>
+    <div class="tab" id="tab-services" role="tab" aria-controls="panel-services" aria-selected="false" tabindex="-1">System</div>
+    <div class="tab" id="tab-console" role="tab" aria-controls="panel-console" aria-selected="false" tabindex="-1">Advanced</div>
   </div>
 
-  <section id="panel-board">
+  <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
     <div class="empty" id="boardHint">Connect to load the WeftMark coordination board.</div>
     <div class="board hidden" id="board"></div>
   </section>
 
-  <section id="panel-services" class="hidden">
+  <section id="panel-services" class="hidden" role="tabpanel" aria-labelledby="tab-services" tabindex="0">
     <div class="tiles" id="tiles"></div>
   </section>
 
-  <section id="panel-console" class="hidden">
+  <section id="panel-console" class="hidden" role="tabpanel" aria-labelledby="tab-console" tabindex="0">
+    <h2>Advanced API console</h2>
     <p class="status">Send an authenticated request through the gateway to any exposed backend.</p>
     <div class="console-grid">
       <select id="cBackend" aria-label="backend"></select>
@@ -148,7 +176,7 @@
     <pre class="out" id="cOut">—</pre>
   </section>
 
-  <section id="panel-opencode" class="hidden">
+  <section id="panel-opencode" class="hidden" role="tabpanel" aria-labelledby="tab-opencode" tabindex="0">
     <div class="rowbar">
       <button id="ocRefresh" class="ghost">Refresh</button>
       <span class="status" id="ocCount"></span>
@@ -157,7 +185,7 @@
     <div class="list" id="ocList"><div class="empty">Loading sessions…</div></div>
   </section>
 
-  <section id="panel-ollama" class="hidden">
+  <section id="panel-ollama" class="hidden" role="tabpanel" aria-labelledby="tab-ollama" tabindex="0">
     <div class="rowbar">
       <input type="text" id="olName" placeholder="model to pull, e.g. gemma3:e2b" spellcheck="false">
       <button id="olPull">Pull</button>
@@ -215,8 +243,7 @@
       ? (DEMO ? "demo" : "connected · " + (info.auth || []).join("+") + " · " + (info.expose || []).join(", "))
       : "not connected";
     $("signout").classList.toggle("hidden", !ok || DEMO);
-    $("token").classList.toggle("hidden", ok);
-    $("connect").classList.toggle("hidden", ok);
+    $("openAuth").classList.toggle("hidden", ok || DEMO);
   }
 
   async function connect() {
@@ -231,6 +258,7 @@
     }
     info = r.data;
     setConnected(true);
+    if ($("authDialog").open) $("authDialog").close();
     $("demoBanner").classList.toggle("hidden", !DEMO);
     buildBackendPicker();
     loadBoard();
@@ -410,18 +438,35 @@
   async function loadServices() {
     const tiles = $("tiles");
     tiles.textContent = "";
-    const exposed = (info && info.expose) || [];
-    if (!exposed.length) { tiles.appendChild(el("div", "empty", "No backends exposed.")); return; }
-    exposed.forEach(async (name) => {
+    const exposedServices = (info && info.expose) || [];
+    if (!exposedServices.length) tiles.appendChild(el("div", "empty", "No backends exposed."));
+    exposedServices.forEach(async (name) => {
       const tile = el("div", "tile");
       tile.appendChild(el("div", "name", name));
       const sub = el("div", "sub", HEALTH[name] || "/"); tile.appendChild(sub);
-      const state = el("div", "state", "checking…"); tile.appendChild(state);
+      const state = el("div", "state", "◌ starting"); tile.appendChild(state);
+      const remedy = el("div", "remedy", "Waiting for the service health check."); tile.appendChild(remedy);
       tiles.appendChild(tile);
       const r = await api(HEALTH[name] || "/" + name + "/");
-      state.textContent = r.ok ? "● healthy" : "● unreachable (" + r.status + ")";
-      state.style.color = r.ok ? "var(--ok)" : "var(--bad)";
+      if (r.ok) {
+        state.textContent = "● ready"; state.style.color = "var(--ok)";
+        remedy.textContent = "The service is responding normally.";
+      } else if (r.status === 401 || r.status === 403) {
+        state.textContent = "▲ degraded"; state.style.color = "var(--warn)";
+        remedy.textContent = "The service is reachable but rejected the health request. Check gateway credentials and route configuration.";
+      } else {
+        state.textContent = "● failed (" + r.status + ")"; state.style.color = "var(--bad)";
+        remedy.textContent = "Check the service log and restart only after the underlying cause is known.";
+      }
     });
+    if (exposedServices.indexOf("ephor") < 0) {
+      const tile = el("div", "tile optional");
+      tile.appendChild(el("div", "name", "Ephor"));
+      tile.appendChild(el("div", "sub", "optional governance integration"));
+      const state = el("div", "state", "○ not installed"); state.style.color = "var(--muted)"; tile.appendChild(state);
+      tile.appendChild(el("div", "remedy", "The baseline suite works without Ephor. An administrator can add it later from an authorized source."));
+      tiles.appendChild(tile);
+    }
   }
 
   // --- API console ---------------------------------------------------------
@@ -449,18 +494,34 @@
 
   // --- Tabs ----------------------------------------------------------------
   const TABS = ["board", "opencode", "ollama", "services", "console"];
-  function selectTab(name) {
+  function visibleTabs() {
+    return TABS.filter((t) => !$("tab-" + t).classList.contains("hidden"));
+  }
+  function selectTab(name, focus) {
     TABS.forEach((t) => {
-      $("tab-" + t).setAttribute("aria-selected", String(t === name));
-      $("panel-" + t).classList.toggle("hidden", t !== name);
+      const selected = t === name;
+      $("tab-" + t).setAttribute("aria-selected", String(selected));
+      $("tab-" + t).tabIndex = selected ? 0 : -1;
+      $("panel-" + t).classList.toggle("hidden", !selected);
     });
+    if (focus) $("tab-" + name).focus();
   }
   TABS.forEach((t) => {
     const tab = $("tab-" + t);
     tab.addEventListener("click", () => selectTab(t));
-    tab.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectTab(t); } });
+    tab.addEventListener("keydown", (e) => {
+      const tabs = visibleTabs(); const i = tabs.indexOf(t); let next = null;
+      if (e.key === "ArrowRight") next = tabs[(i + 1) % tabs.length];
+      if (e.key === "ArrowLeft") next = tabs[(i - 1 + tabs.length) % tabs.length];
+      if (e.key === "Home") next = tabs[0];
+      if (e.key === "End") next = tabs[tabs.length - 1];
+      if (next) { e.preventDefault(); selectTab(next, true); }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectTab(t, true); }
+    });
   });
 
+  $("openAuth").addEventListener("click", () => { $("authDialog").showModal(); $("token").focus(); });
+  $("cancelAuth").addEventListener("click", () => $("authDialog").close());
   $("connect").addEventListener("click", connect);
   $("signout").addEventListener("click", signout);
   $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
