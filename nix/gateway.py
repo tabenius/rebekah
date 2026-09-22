@@ -676,7 +676,10 @@ def make_handler(cfg, auth):
             # OpenCode / Sylvae correlation slots. WeftMark does not yet surface
             # those identifiers, so they are declared absent (with a reason)
             # rather than joined on a guess -- the interface shows the spine's
-            # shape and fills in once real references land.
+            # shape and fills in once real references land. The WeftMark change
+            # needed to populate these is scoped in
+            # docs/WEFTMARK-RUNTIME-LINKS-SCOPE.md (evidence producer/artifact
+            # ids); wire the parse here when that lands.
             related = {
                 "opencode": {"linked": False,
                              "reason": "WeftMark does not yet surface an OpenCode session reference for this change set."},
