@@ -122,9 +122,12 @@ against the current WeftMark pin (whose detail route has no `evidence_refs`
 yet) — it will light up once the pin advances past
 [tabenius/WeftMark#39](https://github.com/tabenius/WeftMark/pull/39) and a
 producer stamps a namespaced id (see
-[tabenius/sylvae#1](https://github.com/tabenius/sylvae/pull/1)). The remaining
-real gap is the **bridge** that records a Sylvae run *into* WeftMark evidence
-with `runtime_ref` as the producer id.
+[tabenius/sylvae#1](https://github.com/tabenius/sylvae/pull/1)). Sylvae now
+supports a coordinator-preallocated `--run-id`; the coordinator gives the same
+identity to WeftMark as `--producer-id sylvae:run/<id>` and runs the real
+`sylvae run ... --run-id <id>` command through `weftmark evidence run`. This
+closes the bridge without importing mutable results, guessing joins, or making
+Rebekah a second evidence authority.
 
 ## Prior art to reconcile
 
