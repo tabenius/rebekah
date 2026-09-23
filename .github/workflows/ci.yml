@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-smoke:
@@ -30,12 +30,22 @@ jobs:
         if: github.head_ref == 'claude/pensive-pasteur-6cah6b'
         run: nix flake lock --update-input weftmark-src --update-input sylvae-src --update-input ephor-src
       - name: Upload coordinated integration lock
-        if: github.head_ref == 'claude/pensive-pasteur-6cah6b'
+        if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'claude/pensive-pasteur-6cah6b'
         uses: actions/upload-artifact@v4
         with:
           name: coordinated-integration-flake-lock
           path: flake.lock
           if-no-files-found: error
+      - name: Commit coordinated integration lock
+        if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'claude/pensive-pasteur-6cah6b'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add flake.lock
+          if ! git diff --cached --quiet; then
+            git commit -m 'build: lock coordinated integration revisions'
+            git push origin "HEAD:${{ github.head_ref }}"
+          fi
       - name: Check flake
         run: nix flake check --print-build-logs
       - name: Test Ephor connector
