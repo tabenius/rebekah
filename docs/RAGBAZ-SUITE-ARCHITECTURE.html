@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Architecture atlas for v-BAZ, Rebekah, WeftMark and Sylvae: system topology, repository responsibilities, contracts, data flows and current integration state.">
+  <title>RAGBAZ Suite Architecture — v-BAZ, Rebekah, WeftMark and Sylvae</title>
+  <style>
+    :root{--bg:#1d2021;--panel:#282828;--panel2:#32302f;--fg:#ebdbb2;--muted:#bdae93;--blue:#458588;--blue2:#83a598;--sand:#d8a657;--green:#98971a;--red:#cc241d;--purple:#b16286;--line:#504945;--shadow:#1118}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}body{margin:0}
+    a{color:var(--blue2)}a:hover{text-decoration-thickness:2px}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#fabd2f}
+    .shell{width:min(1180px,calc(100% - 2rem));margin:auto;padding:2.5rem 0 5rem}.hero{display:grid;grid-template-columns:1.6fr .8fr;gap:2rem;align-items:end;padding:2rem 0 2.5rem;border-bottom:1px solid var(--line)}
+    .eyebrow{color:var(--sand);letter-spacing:.12em;text-transform:uppercase;font-size:.78rem;font-weight:700}.hero h1{font-size:clamp(2.4rem,6vw,5.2rem);line-height:.98;margin:.4rem 0 1rem;color:#fbf1c7;letter-spacing:-.045em}.lead{font-size:1.15rem;color:var(--muted);max-width:66ch}.stamp{border-left:4px solid var(--blue);padding:1rem 1.2rem;background:var(--panel)}
+    nav{position:sticky;top:0;z-index:10;margin:0 -1rem 2rem;padding:.7rem 1rem;background:#1d2021ed;border-bottom:1px solid var(--line);backdrop-filter:blur(10px);display:flex;gap:.45rem;overflow:auto}nav a{white-space:nowrap;text-decoration:none;padding:.45rem .7rem;border-radius:.3rem;color:var(--muted)}nav a:hover,nav a:focus{background:var(--panel);color:var(--fg)}
+    h2{font-size:clamp(1.7rem,4vw,2.7rem);margin:3.5rem 0 1rem;color:#fbf1c7;letter-spacing:-.025em}h3{color:var(--sand);margin:0 0 .55rem}p{max-width:78ch}.sub{color:var(--muted);max-width:75ch;margin-top:-.5rem}
+    .legend,.chips{display:flex;flex-wrap:wrap;gap:.55rem}.chip{display:inline-flex;align-items:center;gap:.4rem;padding:.25rem .55rem;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:.82rem}.dot{width:.65rem;height:.65rem;border-radius:50%;background:var(--blue2)}
+    .architecture{background:var(--panel);border:1px solid var(--line);border-radius:.7rem;padding:1rem;box-shadow:0 1rem 3rem var(--shadow)}svg{display:block;width:100%;height:auto}.node rect{fill:var(--panel2);stroke:var(--line);stroke-width:2}.node.primary rect{stroke:var(--sand)}.node.core rect{stroke:var(--blue2)}.node text{fill:var(--fg);font:600 18px system-ui}.node .small{fill:var(--muted);font:400 12px system-ui}.flow{stroke:var(--muted);stroke-width:2;fill:none;marker-end:url(#arrow)}.flow.control{stroke:var(--sand)}.flow.evidence{stroke:var(--blue2);stroke-dasharray:7 5}.flow.runtime{stroke:var(--green)}.flow.optional{stroke:var(--purple);stroke-dasharray:3 5}.flow-label{fill:var(--muted);font:12px system-ui}.boundary{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:5 5}.boundary-label{fill:var(--muted);font:12px system-ui}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.card{background:var(--panel);border:1px solid var(--line);border-radius:.55rem;padding:1.15rem}.card p:last-child,.card ul:last-child{margin-bottom:0}.four{grid-template-columns:repeat(4,minmax(0,1fr))}.stat strong{display:block;font-size:1.55rem;color:#fbf1c7}.stat span{color:var(--muted);font-size:.85rem}
+    .flow-list{counter-reset:step;display:grid;gap:.8rem}.flow-step{display:grid;grid-template-columns:2.5rem 1fr;gap:.8rem;align-items:start}.flow-step:before{counter-increment:step;content:counter(step);display:grid;place-items:center;width:2.2rem;height:2.2rem;border-radius:50%;background:var(--blue);color:#fbf1c7;font-weight:700}.flow-step p{margin:.15rem 0}.flow-step strong{color:var(--sand)}
+    .repo{scroll-margin-top:5rem;border-top:1px solid var(--line);padding-top:1rem}.repo-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}.repo-name{display:flex;align-items:center;gap:.75rem}.sigil{width:2.7rem;height:2.7rem;display:grid;place-items:center;border-radius:.45rem;background:var(--panel2);border:1px solid var(--line);font-weight:800;color:var(--sand)}
+    .matrix{width:100%;border-collapse:collapse;background:var(--panel);font-size:.92rem}.matrix th,.matrix td{text-align:left;vertical-align:top;padding:.7rem;border-bottom:1px solid var(--line)}.matrix th{color:var(--sand)}.matrix td:first-child{font-weight:650;color:#fbf1c7}.status{display:inline-block;padding:.15rem .45rem;border-radius:.25rem;font-size:.78rem;font-weight:700}.done{background:#3b4b23;color:#d5e68d}.active{background:#254b50;color:#b8e7e7}.open{background:#5b3c19;color:#ffd799}.blocked{background:#512d2d;color:#ffc1b6}
+    .callout{border-left:4px solid var(--blue);background:var(--panel);padding:1rem 1.2rem;margin:1rem 0}.callout.warn{border-color:var(--sand)}.callout strong{color:#fbf1c7}
+    details{background:var(--panel);border:1px solid var(--line);border-radius:.45rem;margin:.6rem 0;padding:.7rem 1rem}summary{color:var(--sand);font-weight:700;cursor:pointer}.path{font-size:.85rem;color:var(--muted)}
+    .tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:1rem 0}.tabs button{font:inherit;color:var(--muted);background:transparent;border:1px solid var(--line);padding:.45rem .7rem;border-radius:.35rem}.tabs button[aria-selected="true"]{background:var(--blue);color:#fff;border-color:var(--blue)}.panel[hidden]{display:none}
+    footer{margin-top:4rem;border-top:1px solid var(--line);padding-top:1.2rem;color:var(--muted);font-size:.88rem}
+    @media(max-width:850px){.hero{grid-template-columns:1fr}.four{grid-template-columns:repeat(2,minmax(0,1fr))}.architecture{overflow-x:auto}.architecture svg{min-width:760px}}@media(max-width:620px){.grid,.four{grid-template-columns:1fr}.shell{width:min(100% - 1rem,1180px)}.matrix{font-size:.83rem}.matrix th,.matrix td{padding:.5rem}.optional-col{display:none}}
+    @media print{html{background:#fff;color:#222}.shell{width:100%;padding:0}.hero,nav{position:static}.card,.architecture,.stamp,.callout,details,.matrix{background:#fff;color:#222;box-shadow:none}.node rect{fill:#fff}.node text,.flow-label,.boundary-label{fill:#222}a{color:#174f65}.repo{break-before:page}}
+  </style>
+</head>
+<body>
+<main class="shell">
+  <header class="hero">
+    <div><div class="eyebrow">RAGBAZ architecture atlas</div><h1>One portable system.<br>Four clear authorities.</h1><p class="lead">How v-BAZ, Rebekah, WeftMark and Sylvae compose into an offline-first, automatically online-capable environment for governed agentic work—without collapsing their responsibilities into one monolith.</p></div>
+    <aside class="stamp"><strong>Architecture snapshot</strong><br>23 September 2026<br><span class="path">Covers the active integration and portable USB Phase 2 branches.</span></aside>
+  </header>
+  <nav aria-label="Architecture sections"><a href="#together">Together</a><a href="#flow">End-to-end flow</a><a href="#vbaz">v-BAZ</a><a href="#rebekah">Rebekah</a><a href="#weftmark">WeftMark</a><a href="#sylvae">Sylvae</a><a href="#contracts">Contracts</a><a href="#status">Status</a></nav>
+
+  <section id="together">
+    <h2>Architecture together</h2>
+    <p class="sub">v-BAZ owns the machine and durable substrate. Rebekah owns composition and the human-facing gateway. WeftMark owns coordination truth. Sylvae owns portable skill execution and durable run records.</p>
+    <div class="legend"><span class="chip"><span class="dot" style="background:var(--sand)"></span>control / composition</span><span class="chip"><span class="dot"></span>evidence / identity</span><span class="chip"><span class="dot" style="background:var(--green)"></span>runtime traffic</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>optional governance</span></div>
+    <figure class="architecture" aria-labelledby="arch-title arch-desc">
+      <svg viewBox="0 0 1060 640" role="img">
+        <title id="arch-title">RAGBAZ suite architecture</title><desc id="arch-desc">v-BAZ hosts Rebekah. Rebekah composes WeftMark, Sylvae, OpenCode and Ollama behind an authenticated gateway. WeftMark receives evidence identities from Sylvae and presents change set detail through Rebekah. Ephor is optional.</desc>
+        <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+        <rect class="boundary" x="25" y="25" width="1010" height="585" rx="18"/><text class="boundary-label" x="45" y="52">portable machine boundary · v-BAZ</text>
+        <rect class="boundary" x="190" y="100" width="820" height="470" rx="16"/><text class="boundary-label" x="210" y="127">isolated composition boundary · Rebekah</text>
+        <g class="node primary"><rect x="55" y="255" width="180" height="110" rx="12"/><text x="145" y="295" text-anchor="middle">v-BAZ</text><text class="small" x="145" y="320" text-anchor="middle">boot · storage · VM</text><text class="small" x="145" y="340" text-anchor="middle">offline artifacts</text></g>
+        <g class="node primary"><rect x="270" y="160" width="220" height="110" rx="12"/><text x="380" y="199" text-anchor="middle">Rebekah</text><text class="small" x="380" y="225" text-anchor="middle">gateway · console · composition</text><text class="small" x="380" y="245" text-anchor="middle">single authenticated front door</text></g>
+        <g class="node core"><rect x="555" y="150" width="190" height="115" rx="12"/><text x="650" y="190" text-anchor="middle">WeftMark</text><text class="small" x="650" y="216" text-anchor="middle">Change Sets · claims</text><text class="small" x="650" y="236" text-anchor="middle">evidence · review · handoff</text></g>
+        <g class="node core"><rect x="790" y="150" width="185" height="115" rx="12"/><text x="882" y="190" text-anchor="middle">Sylvae</text><text class="small" x="882" y="216" text-anchor="middle">skills · backends · runs</text><text class="small" x="882" y="236" text-anchor="middle">runtime identity</text></g>
+        <g class="node"><rect x="555" y="345" width="190" height="100" rx="12"/><text x="650" y="383" text-anchor="middle">OpenCode</text><text class="small" x="650" y="410" text-anchor="middle">interactive agent sessions</text></g>
+        <g class="node"><rect x="790" y="345" width="185" height="100" rx="12"/><text x="882" y="383" text-anchor="middle">Ollama</text><text class="small" x="882" y="410" text-anchor="middle">local models · offline default</text></g>
+        <g class="node"><rect x="555" y="490" width="420" height="55" rx="12"/><text x="765" y="515" text-anchor="middle">Ephor / KAGP</text><text class="small" x="765" y="535" text-anchor="middle">optional governance evidence; never baseline authority</text></g>
+        <path class="flow control" d="M235 300 C260 300 245 215 270 215"/><text class="flow-label" x="239" y="270">launches</text>
+        <path class="flow control" d="M490 205 L555 205"/><text class="flow-label" x="503" y="194">projects</text>
+        <path class="flow runtime" d="M490 235 C530 275 530 365 555 390"/><path class="flow runtime" d="M490 245 C585 310 715 310 790 390"/>
+        <path class="flow runtime" d="M790 395 L745 395"/><text class="flow-label" x="754" y="384">models</text>
+        <path class="flow runtime" d="M882 265 L882 345"/><text class="flow-label" x="892" y="310">executes</text>
+        <path class="flow evidence" d="M790 205 L745 205"/><text class="flow-label" x="756" y="194">run identity</text>
+        <path class="flow evidence" d="M650 265 C650 305 600 310 600 345"/><text class="flow-label" x="612" y="310">Change Set link</text>
+        <path class="flow optional" d="M650 445 L650 490"/><path class="flow optional" d="M882 445 C882 470 850 480 850 490"/>
+      </svg>
+    </figure>
+    <div class="grid four" style="margin-top:1rem"><div class="card stat"><strong>v-BAZ</strong><span>owns the host</span></div><div class="card stat"><strong>Rebekah</strong><span>owns composition</span></div><div class="card stat"><strong>WeftMark</strong><span>owns work truth</span></div><div class="card stat"><strong>Sylvae</strong><span>owns skill runs</span></div></div>
+  </section>
+
+  <section id="flow">
+    <h2>End-to-end operating flow</h2>
+    <div class="flow-list">
+      <div class="flow-step"><p><strong>Boot and recover.</strong> v-BAZ starts the Alpine A/B host, mounts durable storage, and loads either online images or verified offline artifacts.</p></div>
+      <div class="flow-step"><p><strong>Compose safely.</strong> Rebekah starts isolated OpenCode, Ollama, Sylvae and WeftMark services; only its authenticated gateway is intended to face a user or LAN.</p></div>
+      <div class="flow-step"><p><strong>Claim work.</strong> WeftMark binds a task and Change Set to exact Git lineage, scopes and a time-bounded claim.</p></div>
+      <div class="flow-step"><p><strong>Execute.</strong> Sylvae runs a portable <code>SKILL.md</code> against Ollama, OpenCode, Codex, Claude Code or an API backend and appends a durable run record.</p></div>
+      <div class="flow-step"><p><strong>Correlate.</strong> A preallocated UUID yields <code>sylvae:run/&lt;id&gt;</code>. WeftMark records that opaque producer identity on commit-bound evidence.</p></div>
+      <div class="flow-step"><p><strong>Review in context.</strong> Rebekah resolves the producer identity and exposes Change Set → Sylvae/OpenCode links without guessing or becoming a second source of truth.</p></div>
+    </div>
+  </section>
+
+  <section id="vbaz" class="repo">
+    <div class="repo-head"><div class="repo-name"><div class="sigil">V</div><div><h2>v-BAZ</h2><div class="path">github.com/tabenius/v-BAZ · default branch: main</div></div></div><span class="status active">USB Phase 2 active</span></div>
+    <p class="sub">Portable machine substrate and installer: firmware, disks, boot, durable storage, isolated runtimes and offline artifact delivery.</p>
+    <div class="grid"><article class="card"><h3>Owns</h3><ul><li>UEFI boot and Alpine A/B root slots</li><li>Host storage and persistence</li><li>VM/container runtime provisioning</li><li>Rebekah lifecycle on the host</li><li>Offline image/model staging</li></ul></article><article class="card"><h3>Does not own</h3><ul><li>Agent work readiness</li><li>Skill semantics or model routing policy</li><li>Rebekah’s user/session API</li><li>Evidence review decisions</li></ul></article></div>
+    <details open><summary>Portable USB Phase 2</summary><p>Kali persistence storage and checksum-pinned ISO staging are implemented and CI-proven. Remaining gates are Kali host autostart/boot wiring, reproducible first-boot customization and persistence across two complete outer-host reboots.</p><p class="path">Draft PR #8 · branch codex/portable-usb-phase-2</p></details>
+  </section>
+
+  <section id="rebekah" class="repo">
+    <div class="repo-head"><div class="repo-name"><div class="sigil">R</div><div><h2>Rebekah</h2><div class="path">github.com/tabenius/rebekah · default branch: main</div></div></div><span class="status active">integration branch active</span></div>
+    <p class="sub">The suite composition and experience layer: one image, one authenticated front door and a human interface that keeps underlying authorities intact.</p>
+    <div class="grid"><article class="card"><h3>Owns</h3><ul><li>Nix-pinned component composition</li><li>Service supervision and isolation</li><li>Gateway authentication and proxy policy</li><li>Human-facing console and aggregate APIs</li><li>Optional Ephor connector boundary</li></ul></article><article class="card"><h3>Design invariant</h3><p>Rebekah correlates and explains. It does not reimplement WeftMark’s readiness rules, Sylvae’s execution record, Ollama’s model store or OpenCode’s agent session engine.</p></article></div>
+    <details open><summary>Runtime link slice</summary><p>The gateway consumes WeftMark <code>evidence_refs</code>, recognizes explicit <code>sylvae:run/…</code> and <code>opencode:session/…</code> producers, and otherwise displays “not linked yet.” No join is fabricated from branch names.</p><p class="path">Draft PR #22 · branch claude/pensive-pasteur-6cah6b</p></details>
+  </section>
+
+  <section id="weftmark" class="repo">
+    <div class="repo-head"><div class="repo-name"><div class="sigil">W</div><div><h2>WeftMark</h2><div class="path">github.com/tabenius/WeftMark · default branch: main</div></div></div><span class="status active">runtime identity slice</span></div>
+    <p class="sub">Evidence-bearing control plane around software workers. Git supplies lineage; WeftMark supplies claims, causal evidence, review and handoff.</p>
+    <div class="grid"><article class="card"><h3>Core model</h3><ul><li>Tasks and Change Sets</li><li>File and semantic scopes</li><li>Claims and Git observations</li><li>Typed evidence and artifacts</li><li>Review, readiness and handoff</li></ul></article><article class="card"><h3>Runtime neutrality</h3><p>Producer IDs remain opaque. WeftMark stores <code>sylvae:run/…</code> or <code>opencode:session/…</code> but does not classify vendors. Consumers decide how to resolve them.</p></article></div>
+    <details open><summary>Evidence runtime identity</summary><p>The detail route surfaces evidence producer and artifact references while the board remains lean. CLI evidence capture accepts explicit producer kind and ID. Work in this repository remains subject to dual Frog + native WeftMark claim protocol.</p><p class="path">Draft PR #39 · branch claude/pensive-pasteur-6cah6b</p></details>
+  </section>
+
+  <section id="sylvae" class="repo">
+    <div class="repo-head"><div class="repo-name"><div class="sigil">S</div><div><h2>Sylvae</h2><div class="path">github.com/tabenius/sylvae · default branch: master</div></div></div><span class="status active">CLI + MCP identity</span></div>
+    <p class="sub">Portable skill execution across local models, APIs and agent harnesses, with append-only run evidence and explicit resource consequences.</p>
+    <div class="grid"><article class="card"><h3>Owns</h3><ul><li><code>SKILL.md</code> loading and validation</li><li>Backend selection and execution</li><li>Timeout, recursion and cost guards</li><li>Append-only run evidence</li><li>Stable cross-system run identity</li></ul></article><article class="card"><h3>Backends</h3><ul><li>Ollama: local/offline default</li><li>OpenCode and Codex: agent harnesses</li><li>Claude Code: explicit interactive quota</li><li>Anthropic API: separately credentialed</li></ul></article></div>
+    <details open><summary>Cross-system identity</summary><p>Every run has a stable <code>sylvae:run/&lt;uuid&gt;</code> reference. CLI and MCP callers may preallocate the canonical UUID so the real Sylvae command and WeftMark evidence share one identity. MCP results return both <code>run_id</code> and <code>runtime_ref</code>.</p><p class="path">Draft PR #1 · branch claude/pensive-pasteur-6cah6b</p></details>
+  </section>
+
+  <section id="contracts">
+    <h2>Contracts between repositories</h2>
+    <div class="tabs" role="tablist" aria-label="Contract view"><button type="button" role="tab" aria-selected="true" aria-controls="contract-table" id="tab-contract">Contracts</button><button type="button" role="tab" aria-selected="false" aria-controls="authority-table" id="tab-authority">Authority</button></div>
+    <div class="panel" id="contract-table" role="tabpanel" aria-labelledby="tab-contract"><table class="matrix"><thead><tr><th>Producer</th><th>Consumer</th><th>Contract</th><th>Failure behavior</th></tr></thead><tbody>
+      <tr><td>v-BAZ</td><td>Rebekah</td><td>OCI image/runtime configuration, durable volumes, optional offline tarball</td><td>Do not silently substitute unverified artifacts</td></tr>
+      <tr><td>Rebekah</td><td>WeftMark</td><td>Authenticated proxy and versioned read projection</td><td>Stale/unavailable is explicit; never invent readiness</td></tr>
+      <tr><td>Sylvae</td><td>WeftMark</td><td><code>sylvae:run/&lt;uuid&gt;</code> evidence producer ID</td><td>Invalid preallocated IDs fail before execution</td></tr>
+      <tr><td>WeftMark</td><td>Rebekah</td><td>Change Set detail with <code>evidence_refs</code></td><td>Missing producer remains “not linked yet”</td></tr>
+      <tr><td>Ollama</td><td>Sylvae/OpenCode</td><td>Local model API and model identifiers</td><td>Unavailable model is not misreported as failed work</td></tr>
+    </tbody></table></div>
+    <div class="panel" id="authority-table" role="tabpanel" aria-labelledby="tab-authority" hidden><table class="matrix"><thead><tr><th>Question</th><th>Authority</th><th>Why</th></tr></thead><tbody>
+      <tr><td>Can the machine boot and recover?</td><td>v-BAZ</td><td>It owns firmware, partitions, host slots and persistent storage.</td></tr>
+      <tr><td>Which services are available to this user?</td><td>Rebekah</td><td>It owns the gateway, authentication and composed capability view.</td></tr>
+      <tr><td>Was this software change authorized and proven?</td><td>WeftMark</td><td>It owns claims, scopes, lineage, evidence and review.</td></tr>
+      <tr><td>What skill ran, where and with what result?</td><td>Sylvae</td><td>It owns execution and the append-only run record.</td></tr>
+    </tbody></table></div>
+  </section>
+
+  <section id="status">
+    <h2>Current integration status</h2>
+    <table class="matrix"><thead><tr><th>Milestone</th><th>Status</th><th>Evidence / next gate</th></tr></thead><tbody>
+      <tr><td>Change Set runtime identity</td><td><span class="status done">implemented</span></td><td>WeftMark detail and explicit evidence producer attribution</td></tr>
+      <tr><td>Sylvae identity bridge</td><td><span class="status done">implemented</span></td><td>CLI and MCP preallocation; run identity returned to callers</td></tr>
+      <tr><td>Rebekah link resolution</td><td><span class="status done">implemented</span></td><td>Gateway tests resolve real producer IDs and refuse guessed joins</td></tr>
+      <tr><td>Rebekah packaged pins</td><td><span class="status blocked">pending</span></td><td>Regenerate Nix lock at reviewed WeftMark/Sylvae commits</td></tr>
+      <tr><td>v-BAZ portable host</td><td><span class="status done">CI green</span></td><td>Alpine A/B image and OVMF boot gate pass</td></tr>
+      <tr><td>Kali offline media + persistence storage</td><td><span class="status done">CI green</span></td><td>Checksum-pinned media and non-overwriting ext4 persistence</td></tr>
+      <tr><td>Kali durable guest proof</td><td><span class="status open">open gate</span></td><td>Autostart, customization and two complete host reboots</td></tr>
+    </tbody></table>
+    <div class="callout warn"><strong>Phase-completion rule:</strong> implementation is not the same as verification. No portable USB Phase 2 completion claim is valid until the Kali marker survives two complete outer-host reboot cycles.</div>
+  </section>
+
+  <footer>Self-contained architecture document stored in the Rebekah repository. No remote scripts, stylesheets, fonts or telemetry. Product names remain separate authorities by design.</footer>
+</main>
+<script>
+  const tabs=[...document.querySelectorAll('[role="tab"]')];
+  tabs.forEach(tab=>tab.addEventListener('click',()=>{tabs.forEach(other=>{const selected=other===tab;other.setAttribute('aria-selected',String(selected));document.getElementById(other.getAttribute('aria-controls')).hidden=!selected;});}));
+</script>
+</body>
+</html>
