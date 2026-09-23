@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "ephor-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790096671,
+        "narHash": "sha256-U1SQ8lJSqhvcMZkRFFbLS5xTxDqFnBBoVg/VJtR8RH8=",
+        "owner": "tabenius",
+        "repo": "BAZ.AI-governance",
+        "rev": "5b05af53d695f183e8a7954032a85cc8beeb113b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tabenius",
+        "repo": "BAZ.AI-governance",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "narHash": "sha256-zVxLZiSnmaaPLwnhj7pwmqe3axBg/C6nG5JZsJMh2g4=",
@@ -17,6 +33,7 @@
     },
     "root": {
       "inputs": {
+        "ephor-src": "ephor-src",
         "nixpkgs": "nixpkgs",
         "sylvae-src": "sylvae-src",
         "weftmark-src": "weftmark-src"
@@ -25,15 +42,16 @@
     "sylvae-src": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-Re0XeNXWruUKhXnRxzETRxrQwuIvnfbeA0H8JFebwfQ=",
+        "lastModified": 1790195176,
+        "narHash": "sha256-Uw5OPmGFBt8GIW6XRfsE5p+zxqx3lwzgZEIHPN7AzqA=",
         "owner": "tabenius",
         "repo": "sylvae",
-        "rev": "55f9491c394a54112d2ad39a8720c0b85f015d6c",
+        "rev": "bdcc6e92e1ebd45f9b1a4a548f1ded37d54b3905",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
-        "ref": "master",
+        "ref": "claude/pensive-pasteur-6cah6b",
         "repo": "sylvae",
         "type": "github"
       }
@@ -41,15 +59,16 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1789598959,
-        "narHash": "sha256-zAKgw88eao69/vS9PerkTOnsi+A3SHbu4eGW4RgmBXw=",
+        "lastModified": 1790191007,
+        "narHash": "sha256-UhdkfoSPKCSzQ8RVRM+G/iaADNhFCCeo33s06RoGvs4=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "48bdc25accaf6e68914db6d4efabc8d23b60320f",
+        "rev": "36f48a98aec5678680a2ece9e6bd587c7cb50579",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
+        "ref": "claude/pensive-pasteur-6cah6b",
         "repo": "WeftMark",
         "type": "github"
       }

@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   build-and-smoke:
@@ -24,27 +23,6 @@ jobs:
           # Falls back to GITHUB_TOKEN when the secret is unset (public inputs
           # only; the ephor-src fetch will then 404).
           github_access_token: ${{ secrets.EPHOR_READ_TOKEN || secrets.GITHUB_TOKEN }}
-      # Bootstrap only for the coordinated runtime-identity PR. The resulting
-      # lock is uploaded so it can be reviewed and committed; this conditional
-      # step is removed once that generated lock lands on the branch.
-      - name: Refresh coordinated integration lock
-        if: github.head_ref == 'claude/pensive-pasteur-6cah6b'
-        run: nix flake lock --update-input weftmark-src --update-input sylvae-src --update-input ephor-src
-      - name: Upload coordinated integration lock
-        if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'claude/pensive-pasteur-6cah6b'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coordinated-integration-flake-lock
-          path: flake.lock
-          if-no-files-found: error
-      - name: Publish coordinated integration lock for review
-        if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'claude/pensive-pasteur-6cah6b'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          encoded=$(base64 -w0 flake.lock)
-          printf '<!-- coordinated-integration-flake-lock -->\n`%s`\n' "$encoded" > /tmp/lock-comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/lock-comment.md
       - name: Check flake
         run: nix flake check --print-build-logs
       - name: Test Ephor connector
