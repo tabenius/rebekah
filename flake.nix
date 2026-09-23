@@ -4,11 +4,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     weftmark-src = {
-      url = "github:tabenius/WeftMark";
+      url = "github:tabenius/WeftMark/claude/pensive-pasteur-6cah6b";
       flake = false;
     };
     sylvae-src = {
-      url = "github:tabenius/sylvae/master";
+      url = "github:tabenius/sylvae/claude/pensive-pasteur-6cah6b";
       flake = false;
     };
     ephor-src = {
