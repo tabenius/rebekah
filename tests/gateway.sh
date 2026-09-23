@@ -95,13 +95,41 @@ KANBAN = {
          "task_state": "todo", "change_set_ids": ["cs-1"], "attention": ["blocked"]},
     ],
 }
+# Detail-only evidence runtime identity, keyed by change-set id, as WeftMark's
+# /v0/kanban/changes/{id} carries it (producer id / artifacts). cs-1 has a
+# Sylvae run and an OpenCode session; cs-2 has none.
+EVIDENCE_REFS = {
+    "cs-1": [
+        {"id": "ev-1", "kind": "test", "state": "passed",
+         "producer": {"kind": "worker", "id": "sylvae:run/9f2c1a"}, "artifacts": []},
+        {"id": "ev-2", "kind": "test", "state": "passed",
+         "producer": {"kind": "worker", "id": "opencode:session/s7"}, "artifacts": []},
+    ],
+}
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def do_GET(self):
-        if self.path.split("?", 1)[0] == "/v0/kanban":
+        path = self.path.split("?", 1)[0]
+        if path == "/v0/kanban":
             body = json.dumps(KANBAN).encode()
+        elif path.startswith("/v0/kanban/changes/"):
+            cid = path[len("/v0/kanban/changes/"):]
+            card = next((c for c in KANBAN["cards"] if c["id"] == cid), None)
+            if card is None:
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            detail_card = dict(card)
+            detail_card["evidence_refs"] = EVIDENCE_REFS.get(cid, [])
+            body = json.dumps({
+                "schema": KANBAN["schema"],
+                "generated_at": "2026-08-19T12:00:00+00:00",
+                "authority": {"coordination": "weftmark", "projection": "read_only"},
+                "card": detail_card,
+            }).encode()
         else:
-            body = b"UPSTREAM path=%s" % self.path.encode()
+            body = b"UPSTREAM path=%s" % path.encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -402,9 +430,20 @@ if grep -q '"review-1"' "$csd" && grep -q '"claim-1"' "$csd" && grep -q '"t-9"' 
 else
   fail "cs detail missing correlated links: $(cat "$csd")"
 fi
-grep -q '"opencode"' "$csd" && grep -q '"sylvae"' "$csd" && grep -qE '"linked": *false' "$csd" \
-  && pass "detail declares OpenCode/Sylvae link slots (absent, not fabricated)" \
-  || fail "cs detail missing related slots: $(cat "$csd")"
+# cs-1's evidence carries a Sylvae run and an OpenCode session producer, which
+# the gateway resolves into linked related refs (parsed from the detail route's
+# evidence_refs, never fabricated from a guess).
+if grep -q '"sylvae:run/9f2c1a"' "$csd" && grep -q '"opencode:session/s7"' "$csd" \
+   && grep -qE '"linked": *true' "$csd"; then
+  pass "detail resolves OpenCode/Sylvae links from evidence producers"
+else
+  fail "cs detail did not resolve runtime links: $(cat "$csd")"
+fi
+# cs-2 has no such producer -> the slots stay honestly unlinked.
+csd2="$work/csd2.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets/cs-2" > "$csd2"
+grep -qE '"linked": *false' "$csd2" && ! grep -q 'sylvae:run' "$csd2" \
+  && pass "detail leaves runtime links unlinked when no producer names them" \
+  || fail "cs-2 should have no runtime links: $(cat "$csd2")"
 
 # === 3. OIDC auth (needs PyJWT + cryptography) ==============================
 printf '\n== OIDC (external) auth ==\n'

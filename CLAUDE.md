@@ -23,7 +23,8 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   backends. Also serves the built-in web console, `GET /api/info`, and the
   versioned aggregation API (`GET /api/v1/session|system|attention`, and
   `GET /api/v1/change-sets[/{id}]` — the Change Set spine correlating WeftMark
-  git/evidence/review/handoff/claims/tasks, with OpenCode/Sylvae link slots) the
+  git/evidence/review/handoff/claims/tasks, resolving OpenCode/Sylvae links from
+  WeftMark evidence producer ids where present) the
   console consumes instead of reverse-engineering each backend — every response
   carries a `schema`, `source`, and `observed_at` (see
   `docs/HUMAN-INTERFACE-PLAN.md` and `docs/UI-INSPIRATION-RAGBAZ-KANBAN.md`).
