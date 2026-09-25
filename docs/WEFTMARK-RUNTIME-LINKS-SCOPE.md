@@ -129,6 +129,14 @@ identity to WeftMark as `--producer-id sylvae:run/<id>` and runs the real
 closes the bridge without importing mutable results, guessing joins, or making
 Rebekah a second evidence authority.
 
+That coordinator is `nix/sylvae-evidence.sh` (`rebekah-sylvae-evidence`):
+given `REBEKAH_CHANGE_SET_ID`, a skill path and input, it preallocates the
+run id, records `weftmark --producer-id sylvae:run/<id> evidence run <cs>
+--command sylvae run <skill> --run-id <id> ...`, and emits a
+`cc.ragbaz.rebekah.sylvae-evidence.v0` summary. WeftMark runs the command and
+binds its pass/fail; the gateway then resolves the `related.sylvae` link from
+the stored producer id.
+
 ## Prior art to reconcile
 
 Several WeftMark branches suggest runtime-identity work is already underway and

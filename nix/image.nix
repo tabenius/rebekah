@@ -61,6 +61,7 @@ dockerTools.buildLayeredImage {
     install -m 0555 ${./entrypoint.sh} usr/local/bin/rebekah-entrypoint
     install -m 0555 ${./ephor-connector.sh} usr/local/bin/rebekah-ephor
     install -m 0555 ${./govern.sh} usr/local/bin/rebekah-govern
+    install -m 0555 ${./sylvae-evidence.sh} usr/local/bin/rebekah-sylvae-evidence
     ln -s rebekah-entrypoint usr/local/bin/rebekah-doctor
     ln -s rebekah-entrypoint usr/local/bin/rebekah-health
 
