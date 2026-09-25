@@ -89,7 +89,7 @@
     <div class="repo-head"><div class="repo-name"><div class="sigil">R</div><div><h2>Rebekah</h2><div class="path">github.com/tabenius/rebekah · default branch: main</div></div></div><span class="status active">integration branch active</span></div>
     <p class="sub">The suite composition and experience layer: one image, one authenticated front door and a human interface that keeps underlying authorities intact.</p>
     <div class="grid"><article class="card"><h3>Owns</h3><ul><li>Nix-pinned component composition</li><li>Service supervision and isolation</li><li>Gateway authentication and proxy policy</li><li>Human-facing console and aggregate APIs</li><li>Optional Ephor connector boundary</li></ul></article><article class="card"><h3>Design invariant</h3><p>Rebekah correlates and explains. It does not reimplement WeftMark’s readiness rules, Sylvae’s execution record, Ollama’s model store or OpenCode’s agent session engine.</p></article></div>
-    <details open><summary>Runtime link slice</summary><p>The gateway consumes WeftMark <code>evidence_refs</code>, recognizes explicit <code>sylvae:run/…</code> and <code>opencode:session/…</code> producers, and otherwise displays “not linked yet.” No join is fabricated from branch names.</p><p class="path">Draft PR #22 · branch claude/pensive-pasteur-6cah6b</p></details>
+    <details open><summary>Runtime link slice</summary><p>The gateway consumes WeftMark <code>evidence_refs</code>, recognizes explicit <code>sylvae:run/…</code> and <code>opencode:session/…</code> producers, and otherwise displays “not linked yet.” No join is fabricated from branch names. The packaged integration is locked to WeftMark <code>36f48a9</code>, Sylvae <code>bdcc6e9</code> and Ephor <code>5b05af5</code>; Rebekah CI run 118 verified that exact lock on 25 September 2026.</p><p class="path">Draft PR #22 · branch claude/pensive-pasteur-6cah6b</p></details>
   </section>
 
   <section id="weftmark" class="repo">
@@ -130,7 +130,7 @@
       <tr><td>Change Set runtime identity</td><td><span class="status done">implemented</span></td><td>WeftMark detail and explicit evidence producer attribution</td></tr>
       <tr><td>Sylvae identity bridge</td><td><span class="status done">implemented</span></td><td>CLI and MCP preallocation; run identity returned to callers</td></tr>
       <tr><td>Rebekah link resolution</td><td><span class="status done">implemented</span></td><td>Gateway tests resolve real producer IDs and refuse guessed joins</td></tr>
-      <tr><td>Rebekah packaged pins</td><td><span class="status blocked">pending</span></td><td>Regenerate Nix lock at reviewed WeftMark/Sylvae commits</td></tr>
+      <tr><td>Rebekah packaged pins</td><td><span class="status done">CI green</span></td><td>Lock pins WeftMark <code>36f48a9</code>, Sylvae <code>bdcc6e9</code> and Ephor <code>5b05af5</code>; CI run 118 passed</td></tr>
       <tr><td>v-BAZ portable host</td><td><span class="status done">CI green</span></td><td>Alpine A/B image and OVMF boot gate pass</td></tr>
       <tr><td>Kali offline media + persistence storage</td><td><span class="status done">CI green</span></td><td>Checksum-pinned media and non-overwriting ext4 persistence</td></tr>
       <tr><td>Kali durable guest proof</td><td><span class="status open">open gate</span></td><td>Autostart, customization and two complete host reboots</td></tr>
