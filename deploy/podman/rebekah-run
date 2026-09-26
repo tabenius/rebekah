@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Run Rebekah under rootless Podman as the invoking user (see README.md here).
+#
+# The container runs with the README's least-privilege set: five capabilities,
+# no-new-privileges, a read-only root, tmpfs /run/rebekah and /tmp. Rootless
+# Podman adds a user namespace, so container root is this user on the host.
+#
+# Settings (environment, or ~/.config/rebekah/rebekah.env for the systemd unit):
+#   REBEKAH_IMAGE      image to run; pin a digest (…/rebekah@sha256:…)
+#   REBEKAH_NAME       container name                   (default: rebekah)
+#   REBEKAH_WORKSPACE  Git repository to govern          (default: ~/workspace)
+#   REBEKAH_VOLUME     state volume                      (default: rebekah-state)
+#   REBEKAH_PIDS_LIMIT process limit                     (default: 4096)
+#   REBEKAH_MEMORY     memory limit, e.g. 16g            (default: none)
+#   REBEKAH_ENV_FILE   extra container env (no secrets)  (default: ~/.config/rebekah/container.env)
+#
+# Secrets are Podman secrets, passed as environment variables inside the
+# container only, so `podman inspect` does not show them. Each is used when it
+# exists:
+#   rebekah-dash-push-key  -> REBEKAH_DASH_PUSH_KEY
+#   rebekah-admin-password -> REBEKAH_ADMIN_PASSWORD
+#   rebekah-gateway-token  -> REBEKAH_GATEWAY_TOKEN
+set -euo pipefail
+
+image="${REBEKAH_IMAGE:?set REBEKAH_IMAGE, preferably to a digest}"
+name="${REBEKAH_NAME:-rebekah}"
+workspace="${REBEKAH_WORKSPACE:-$HOME/workspace}"
+volume="${REBEKAH_VOLUME:-rebekah-state}"
+env_file="${REBEKAH_ENV_FILE:-$HOME/.config/rebekah/container.env}"
+
+if ! git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
+  printf 'rebekah-run: %s must be a Git repository with a commit\n' "$workspace" >&2
+  exit 1
+fi
+
+podman volume exists "$volume" || podman volume create "$volume" >/dev/null
+
+args=(
+  --rm --name "$name"
+  --read-only
+  --cap-drop=ALL
+  --cap-add=CHOWN --cap-add=DAC_OVERRIDE
+  --cap-add=SETUID --cap-add=SETGID --cap-add=KILL
+  --security-opt=no-new-privileges
+  --pids-limit "${REBEKAH_PIDS_LIMIT:-4096}"
+  --stop-timeout 30
+  # mode=1777: Podman recreates an unmoded tmpfs as 0755 on restart.
+  --tmpfs "/run/rebekah:rw,noexec,nosuid,size=16m"
+  --tmpfs "/tmp:rw,noexec,nosuid,size=64m,mode=1777"
+  --mount "type=volume,src=$volume,dst=/var/lib/rebekah"
+  --mount "type=bind,src=$workspace,dst=/workspace"
+)
+if [[ -n "${REBEKAH_MEMORY:-}" ]]; then
+  args+=(--memory "$REBEKAH_MEMORY")
+fi
+if [[ -r "$env_file" ]]; then
+  args+=(--env-file "$env_file")
+fi
+for pair in \
+  rebekah-dash-push-key:REBEKAH_DASH_PUSH_KEY \
+  rebekah-admin-password:REBEKAH_ADMIN_PASSWORD \
+  rebekah-gateway-token:REBEKAH_GATEWAY_TOKEN; do
+  secret="${pair%%:*}"
+  if podman secret exists "$secret"; then
+    args+=(--secret "$secret,type=env,target=${pair#*:}")
+  fi
+done
+
+exec podman run "${args[@]}" "$image" "$@"

@@ -353,17 +353,39 @@ class Authenticator:
             try:
                 self.passwords = PasswordStore(cfg.auth_db, cfg.session_ttl)
                 if self.passwords.user_count() == 0:
-                    pw = cfg.admin_password or secrets.token_urlsafe(12)
-                    self.passwords.upsert_user(cfg.admin_user, pw)
-                    if not cfg.admin_password:
-                        sys.stderr.write(
-                            "rebekah-gateway: seeded admin user %r with a generated "
-                            "password: %s  (save it now; shown once)\n"
-                            % (cfg.admin_user, pw))
+                    self._seed_admin(cfg)
             except Exception as exc:  # noqa: BLE001 -- degrade, never crash
                 sys.stderr.write(
                     "rebekah-gateway: password login unavailable (%s)\n" % exc)
                 self.passwords = None
+
+    def _seed_admin(self, cfg):
+        """Seed the first user. A generated password goes to a 0600 file in the
+        gateway's own 0700 state dir, never to the log: container logs end up in
+        the host journal, readable long after "shown once". If the file cannot
+        be written, nothing is seeded and the next start tries again."""
+        if cfg.admin_password:
+            self.passwords.upsert_user(cfg.admin_user, cfg.admin_password)
+            return
+        pw = secrets.token_urlsafe(18)
+        path = os.path.join(os.path.dirname(os.path.abspath(cfg.auth_db)),
+                            "initial-admin-password")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                         0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(pw + "\n")
+            os.chmod(path, 0o600)
+        except OSError as exc:
+            sys.stderr.write(
+                "rebekah-gateway: could not write %s (%s); admin user not "
+                "seeded, set REBEKAH_ADMIN_PASSWORD or fix the state dir\n"
+                % (path, exc.strerror or exc))
+            return
+        self.passwords.upsert_user(cfg.admin_user, pw)
+        sys.stderr.write(
+            "rebekah-gateway: seeded admin user %r; its generated password is in "
+            "%s (read it, then delete the file)\n" % (cfg.admin_user, path))
 
     @property
     def password_active(self):

@@ -104,8 +104,11 @@ schemes flagship agent/kanban orchestrators use, and a request is accepted if
 **Signing in (default).** The console shows a username/password form. On first
 boot the gateway seeds an `admin` user (`REBEKAH_ADMIN_USER`) into a SQLite DB in
 its `0700` state dir, hashing passwords with `scrypt`. Set `REBEKAH_ADMIN_PASSWORD`
-for a known password; otherwise a random one is generated and **logged once** at
-startup — read it with `docker logs <container> | grep 'seeded admin'`. Login
+for a known password; otherwise a random one is generated into
+`/var/lib/rebekah/gateway/initial-admin-password` (`0600`). It is never logged,
+since container logs outlive "shown once" in the host's journal. Read it, then
+delete the file:
+`docker exec <container> sh -c 'cat /var/lib/rebekah/gateway/initial-admin-password && rm /var/lib/rebekah/gateway/initial-admin-password'`. Login
 mints an opaque bearer session (`REBEKAH_SESSION_TTL`, default 12h); `POST
 /api/logout` revokes it. Only session-token hashes are stored.
 
@@ -279,12 +282,15 @@ docker run --rm \
   --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
   --security-opt=no-new-privileges \
   --tmpfs /run/rebekah:rw,noexec,nosuid,size=16m \
-  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --mount type=volume,src=rebekah-state,dst=/var/lib/rebekah \
   --mount type=bind,src="$PWD",dst=/workspace \
   -e REBEKAH_CHANGE_SET_ID=your-change-set-id \
   rebekah:latest
 ```
+
+To run it as an unprivileged host user under rootless Podman, with systemd,
+Podman secrets and a pinned digest, see [`deploy/podman/`](deploy/podman/README.md).
 
 The entrypoint initializes volume ownership for the five isolated service UIDs.
 The mounted workspace is the only Git safe-directory exception configured by
