@@ -1,7 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# Ephor is opt-in: an explicit EPHOR_URL (an external deployment), or the
+# bridge this container supervises when REBEKAH_EPHOR_ENABLE=1. Neither means
+# governance was never enabled here, and an evaluation fails closed.
 ephor_url="${EPHOR_URL:-}"
+if [[ -z "$ephor_url" && "${REBEKAH_EPHOR_ENABLE:-0}" == 1 ]]; then
+  ephor_url="http://${EPHOR_HOST:-127.0.0.1}:${EPHOR_PORT:-9800}"
+fi
 api_style="${EPHOR_API_STYLE:-governance-http}"
 output="${REBEKAH_GOVERNANCE_EVIDENCE:-/tmp/rebekah-governance-evidence.json}"
 change_set_id="${REBEKAH_CHANGE_SET_ID:-}"
@@ -74,7 +80,7 @@ evaluate() {
   local result_summary="${2:-Governance evaluation completed}"
 
   if [[ -z "$ephor_url" ]]; then
-    fail_closed unavailable "EPHOR_URL is not configured"
+    fail_closed unavailable "Ephor is not enabled (set REBEKAH_EPHOR_ENABLE=1 or EPHOR_URL)"
     return 1
   fi
   # A governance connector must only ever reach an http(s) endpoint. Refuse

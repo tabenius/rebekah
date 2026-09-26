@@ -28,9 +28,9 @@ jobs:
 
       - uses: cachix/install-nix-action@v31
         with:
-          # See ci.yml: EPHOR_READ_TOKEN reaches the private ephor-src input;
-          # falls back to GITHUB_TOKEN (public inputs only) when unset.
-          github_access_token: ${{ secrets.EPHOR_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          # The published image is the baseline: public inputs only, no Ephor
+          # (opt-in, built from a private source, never pushed to GHCR here).
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build image
         run: nix build .#image --print-build-logs

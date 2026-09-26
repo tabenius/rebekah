@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image="${REBEKAH_IMAGE:-rebekah:latest}"
+# Ephor is opt-in. By default this tests the baseline image, where it is
+# absent; REBEKAH_SMOKE_EPHOR=1 tests an image-ephor build with it enabled.
+smoke_ephor="${REBEKAH_SMOKE_EPHOR:-0}"
+if [[ "$smoke_ephor" == 1 ]]; then
+  image="${REBEKAH_IMAGE:-rebekah:ephor}"
+  ephor_env=(-e REBEKAH_EPHOR_ENABLE=1)
+else
+  image="${REBEKAH_IMAGE:-rebekah:latest}"
+  ephor_env=()
+fi
 runtime="${CONTAINER_RUNTIME:-docker}"
 name="rebekah-smoke-$BASHPID"
 fixture="$(mktemp -d)"
@@ -40,6 +49,7 @@ chmod -R a+rwX "$fixture"
   -v "$fixture:/workspace" \
   -e REBEKAH_CHANGE_SET_ID=smoke-change-set \
   -e REBEKAH_ADMIN_PASSWORD=smoke-admin-pw \
+  "${ephor_env[@]}" \
   "$image" >/dev/null
 
 for _ in $(seq 1 90); do
@@ -61,10 +71,26 @@ for _ in $(seq 1 90); do
       --repo /workspace --ledger /var/lib/rebekah/weftmark/ledger.jsonl \
       changeset create smoke-change-set \
       --goal "Verify governed Rebekah integration" --scope "contract:governance"
-    "$runtime" exec \
-      -e EPHOR_POLICY_REVISION=smoke-v0 \
-      "$name" rebekah-govern |
-      jq -e '.ready == true and .evidence.evidence.state == "passed"' >/dev/null
+    # Governance is asked for explicitly (rebekah-govern). With Ephor enabled
+    # it passes; without it the Change Set must not become ready: the
+    # connector fails closed and records why.
+    if [[ "$smoke_ephor" == 1 ]]; then
+      "$runtime" exec \
+        -e EPHOR_POLICY_REVISION=smoke-v0 \
+        "$name" rebekah-govern |
+        jq -e '.ready == true and .evidence.evidence.state == "passed"' >/dev/null
+    else
+      if govern_out="$("$runtime" exec "$name" rebekah-govern)"; then
+        printf 'failed: rebekah-govern passed without Ephor\n' >&2
+        exit 1
+      fi
+      jq -e '.ready == false and .evidence_exit != 0' >/dev/null <<<"$govern_out"
+      grep -q 'ok      ephor/absent' <<<"$doctor_out"
+      if "$runtime" exec "$name" sh -c 'command -v governance-http' >/dev/null 2>&1; then
+        printf 'failed: the baseline image bundles governance-http\n' >&2
+        exit 1
+      fi
+    fi
     # Containment invariant: a service UID must not be able to read another
     # service's state directory (0750, per-service group). opencode (10002)
     # must be denied the weftmark (10004), ollama (10001), and Ephor (10006)
@@ -194,20 +220,29 @@ for _ in $(seq 1 90); do
     fi
     "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
       http://127.0.0.1:8080/api/v1/oversight |
-      jq -e '.schema == "rebekah.oversight.v1" and .source == "rebekah-gateway" and .stale == false and .decisions.oversight == true and .decisions.review == true' >/dev/null
-    # An agent must not decide its own hold: Ephor's reviewer routes refuse a
-    # caller without EPHOR_OVERSIGHT_TOKEN, here OpenCode's UID on loopback.
-    for auth in "" "Authorization: Bearer not-the-oversight-token"; do
-      ephor_decide="$("$runtime" exec --user 10002:10002 "$name" \
-        curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${auth:+-H "$auth"} \
-        -H 'Content-Type: application/json' -X POST \
-        --data '{"request_id":"smoke","decision":"approved","reviewer":"agent@example.com","rationale":"self"}' \
-        http://127.0.0.1:9800/oversight/decide)"
-      if [[ "$ephor_decide" != 401 ]]; then
-        printf 'failed: Ephor accepted a decision without the reviewer token (got %s)\n' "$ephor_decide" >&2
-        exit 1
-      fi
-    done
+      jq -e --argjson on "$([[ "$smoke_ephor" == 1 ]] && echo true || echo false)" \
+        '.schema == "rebekah.oversight.v1" and .source == "rebekah-gateway" and
+         .stale == false and .enabled == $on and .decisions.oversight == $on and
+         .decisions.review == true' >/dev/null
+    "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
+      http://127.0.0.1:8080/api/v1/system |
+      jq -e --arg state "$([[ "$smoke_ephor" == 1 ]] && echo enabled || echo absent)" \
+        '.ephor.state == $state and .ephor.optional == true' >/dev/null
+    # An agent must not decide its own hold: an enabled Ephor's reviewer routes
+    # refuse a caller without EPHOR_OVERSIGHT_TOKEN, here OpenCode's UID.
+    if [[ "$smoke_ephor" == 1 ]]; then
+      for auth in "" "Authorization: Bearer not-the-oversight-token"; do
+        ephor_decide="$("$runtime" exec --user 10002:10002 "$name" \
+          curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${auth:+-H "$auth"} \
+          -H 'Content-Type: application/json' -X POST \
+          --data '{"request_id":"smoke","decision":"approved","reviewer":"agent@example.com","rationale":"self"}' \
+          http://127.0.0.1:9800/oversight/decide)"
+        if [[ "$ephor_decide" != 401 ]]; then
+          printf 'failed: Ephor accepted a decision without the reviewer token (got %s)\n' "$ephor_decide" >&2
+          exit 1
+        fi
+      done
+    fi
 
     # Restart on the same state: the entrypoint must set up state directories
     # the service UIDs already own, still without CAP_FOWNER.
@@ -241,7 +276,12 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
-    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, SQLite login, web console, oversight view, scoped secrets, restart, and clean stop are healthy\n'
+    if [[ "$smoke_ephor" == 1 ]]; then
+      printf 'ok: Ephor opted in: governed WeftMark evidence passes and held actions are reviewable\n'
+    else
+      printf 'ok: Ephor absent: nothing fails, and asking for governance fails closed\n'
+    fi
+    printf 'ok: core services, service isolation, authenticated gateway, SQLite login, web console, oversight view, scoped secrets, restart, and clean stop are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then

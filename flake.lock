@@ -3,18 +3,14 @@
     "ephor-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790425957,
-        "narHash": "sha256-yz0RebX2gp76b0041m9Ki+ibszDlMkQGg9pQAOdkDE4=",
-        "owner": "tabenius",
-        "repo": "BAZ.AI-governance",
-        "rev": "713c833ce636640b147837fdd66f14c073e7772f",
-        "type": "github"
+        "path": "./nix/ephor-absent",
+        "type": "path"
       },
       "original": {
-        "owner": "tabenius",
-        "repo": "BAZ.AI-governance",
-        "type": "github"
-      }
+        "path": "./nix/ephor-absent",
+        "type": "path"
+      },
+      "parent": []
     },
     "nixpkgs": {
       "locked": {
@@ -59,11 +55,11 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790429875,
-        "narHash": "sha256-oVNZqDRndiG1QXN6Vq5b9NQ0D5QDmRebI3WToCxiyJs=",
+        "lastModified": 1790455859,
+        "narHash": "sha256-+UsQ3FIh0H79twMtLb+tlYg5mj3lZJy8on4ZjgKtsqM=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "864dc9c0d690f07743327a9730ab96ad718a06a4",
+        "rev": "032b800cfab789a9d93cd82ad552570603e1d3fd",
         "type": "github"
       },
       "original": {

@@ -321,9 +321,13 @@ class DecisionsTest(unittest.TestCase):
         self.addCleanup(self.wm_srv.shutdown)
         self.clock = Clock()
         self.logs = []
+        self.pusher = self.make_pusher(REBEKAH_EPHOR_STATE="enabled")
+
+    def make_pusher(self, **extra):
         cfg = config(EPHOR_PORT=str(EPHOR_PORT), WEFTMARK_PORT=str(self.wm_srv.server_address[1]),
-                     EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN, REBEKAH_WEFTMARK_WRITE_TOKEN=WRITE_TOKEN)
-        self.pusher = gw.DashPusher(cfg, gw.Authenticator(cfg), clock=self.clock, log=self.logs.append)
+                     EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN, REBEKAH_WEFTMARK_WRITE_TOKEN=WRITE_TOKEN,
+                     **extra)
+        return gw.DashPusher(cfg, gw.Authenticator(cfg), clock=self.clock, log=self.logs.append)
 
     def give(self, *commands, where=("GET", "/api/connector/pending")):
         Dash.reply[where] = (200, {"commands": list(commands)}, {})
@@ -340,11 +344,37 @@ class DecisionsTest(unittest.TestCase):
         self.assertEqual((view["schema"], view["source"], view["origin"]),
                          ("rebekah.oversight.v1", "rebekah-gateway", "ephor"))
         self.assertFalse(view["stale"])
+        self.assertEqual((view["source"], view["enabled"]), ("rebekah-gateway", True))
         self.assertEqual(view["decisions"], {"oversight": True, "review": True})
         item = view["items"][0]
         self.assertEqual((item["request_id"], item["action"], item["risk_level"]), ("h1", "repo.push", "high"))
         self.assertEqual(item["arguments"], ["branch=main", "force=true"])
         self.assertRegex(item["deadline"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_without_an_enabled_ephor_there_is_nothing_to_hold_or_decide(self):
+        # Ephor is opt-in: absent, bundled but off, or external, the gateway
+        # never calls a local bridge, even one listening on EPHOR_PORT with a
+        # reviewer token in the environment.
+        for n, state in enumerate(("absent", "disabled", "external", None)):
+            with self.subTest(state=state):
+                Ephor.holds = {"h1": hold("h1")}
+                Ephor.calls.clear()
+                pusher = self.make_pusher(REBEKAH_EPHOR_STATE=state)
+                self.give({"id": "cmd-100000%d" % n, "kind": "oversight.decide",
+                           "requested_by": "ada@example.com",
+                           "params": {"request_id": "h1", "decision": "approved", "rationale": "ok"}},
+                          where=("POST", "/api/connector/push"))
+                pusher.step()
+                pushes = [r for r in Dash.requests if r["path"] == "/api/connector/push"]
+                view = pushes[-1]["body"]["views"]["oversight"]
+                self.assertEqual((view["enabled"], view["stale"], view["items"]), (False, False, []))
+                self.assertEqual(view["source"], "rebekah-gateway")
+                self.assertFalse(view["decisions"]["oversight"])
+                self.assertEqual(pushes[-1]["body"]["views"]["system"]["ephor"]["state"], state or "absent")
+                self.assertEqual(self.results()[-1][0]["error"], "oversight_not_enabled")
+                self.assertEqual(Ephor.calls, [])
+                self.assertEqual(Ephor.holds["h1"]["status"], "pending")
+                del Dash.reply[("POST", "/api/connector/push")]
 
     def test_an_approval_is_applied_with_the_reviewer_token_and_reported(self):
         Ephor.holds = {"h1": hold("h1")}
