@@ -92,10 +92,84 @@ class Dash(BaseHTTPRequestHandler):
         pass
 
 
+OVERSIGHT_TOKEN = "oversight-token-0123456789"
+WRITE_TOKEN = "weftmark-write-0123456789"
+
+
+class Ephor(BaseHTTPRequestHandler):
+    """A tiny governance-http: holds, and reviewer routes behind a bearer token."""
+    holds = {}
+    calls = []
+
+    def _send(self, status, data):
+        out = json.dumps(data).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def do_GET(self):
+        rid = self.path.rsplit("/", 1)[-1]
+        if self.path.startswith("/oversight/fetch/") and rid in Ephor.holds:
+            return self._send(200, {"action": Ephor.holds[rid]})
+        self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        Ephor.calls.append((self.path, self.headers.get("Authorization"), body))
+        if self.path == "/oversight/list":
+            items = [h for h in Ephor.holds.values() if h["status"] == body.get("status")]
+            return self._send(200, {"items": items, "total": len(items), "next_cursor": None})
+        if self.headers.get("Authorization") != "Bearer " + OVERSIGHT_TOKEN:
+            return self._send(401, {"error": "reviewer token required"})
+        hold = Ephor.holds.get(body.get("request_id"))
+        if hold is None:
+            return self._send(400, {"error": "Approval request not found"})
+        if self.path == "/oversight/decide":
+            hold.update(status=body["decision"], reviewer=body["reviewer"], rationale=body["rationale"])
+        elif self.path == "/oversight/defer":
+            hold["deadline_ms"] += body["defer_ms"]
+        elif self.path == "/oversight/escalate":
+            hold["target_queue"] = body["target_queue"]
+        self._send(200, {"action": hold})
+
+    def log_message(self, *a):
+        pass
+
+
+class WeftMarkControl(Kanban):
+    """The kanban mock plus WeftMark's review control route."""
+    reviews = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        WeftMarkControl.reviews.append((self.path, self.headers.get("Authorization"),
+                                        self.headers.get("Idempotency-Key"), body))
+        outcome = "blocked" if body.get("request_changes") else "evidence_incomplete"
+        out = json.dumps({"ok": True, "control": {"result": {"decision": {
+            "id": body["review_id"], "author_id": body["author_id"], "outcome": outcome}}}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+
+def hold(rid="11111111-2222-4333-8444-555555555555", deadline_ms=None):
+    return {"request_id": rid, "session_id": "s", "agent_class": "CodingAgent",
+            "action": "repo.push", "arguments": ["branch=main", "force=true"],
+            "risk_level": "high", "risk_flags": ["requires_human_approval"],
+            "entry_id": "e-1", "status": "pending",
+            "deadline_ms": deadline_ms if deadline_ms is not None else int(time.time() * 1000) + 600000}
+
+
+ephor_srv = serve(Ephor)
+EPHOR_PORT = ephor_srv.server_address[1]
 kanban_srv = serve(Kanban)
 dash_srv = serve(Dash)
 KB_PORT = kanban_srv.server_address[1]
 DASH_URL = "http://127.0.0.1:%d" % dash_srv.server_address[1]
+CLOSED_PORT = free_port()
 
 
 def config(**extra):
@@ -106,6 +180,8 @@ def config(**extra):
         "WEFTMARK_PORT": str(KB_PORT),
         "REBEKAH_DASH_URL": DASH_URL,
         "REBEKAH_DASH_PUSH_KEY": KEY,
+        # No Ephor unless a test brings one: never reach a real service on 9800.
+        "EPHOR_PORT": str(CLOSED_PORT),
     }
     env.update(extra)
     return gw.Config({k: v for k, v in env.items() if v is not None})
@@ -165,6 +241,7 @@ class PusherTest(unittest.TestCase):
             "system": "rebekah.system.v1",
             "attention": "rebekah.attention.v1",
             "change-sets": "rebekah.change-set-list.v1",
+            "oversight": "rebekah.oversight.v1",
         })
         self.assertEqual(body["views"]["change-sets"]["items"][0]["id"], "cs-1")
         self.assertEqual(body["views"]["attention"]["items"][0]["reason"], "dirty_worktree")
@@ -229,6 +306,158 @@ class PusherTest(unittest.TestCase):
         pusher = gw.DashPusher(cfg, gw.Authenticator(cfg), clock=self.clock, log=self.logs.append)
         self.assertEqual(pusher.step(), 60)
         self.assertLessEqual(max(pusher.step() for _ in range(12)), gw.DASH_MAX_BACKOFF)
+
+
+class DecisionsTest(unittest.TestCase):
+    """Human-in-the-loop decisions from Dash, applied to the local Ephor/WeftMark."""
+
+    def setUp(self):
+        Dash.requests.clear()
+        Dash.reply.clear()
+        Ephor.holds = {}
+        Ephor.calls.clear()
+        WeftMarkControl.reviews.clear()
+        self.wm_srv = serve(WeftMarkControl)
+        self.addCleanup(self.wm_srv.shutdown)
+        self.clock = Clock()
+        self.logs = []
+        cfg = config(EPHOR_PORT=str(EPHOR_PORT), WEFTMARK_PORT=str(self.wm_srv.server_address[1]),
+                     EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN, REBEKAH_WEFTMARK_WRITE_TOKEN=WRITE_TOKEN)
+        self.pusher = gw.DashPusher(cfg, gw.Authenticator(cfg), clock=self.clock, log=self.logs.append)
+
+    def give(self, *commands, where=("GET", "/api/connector/pending")):
+        Dash.reply[where] = (200, {"commands": list(commands)}, {})
+
+    def results(self):
+        return [r["body"]["results"] for r in Dash.requests if r["path"] == "/api/connector/results"]
+
+    def test_pending_holds_are_pushed_as_the_oversight_view(self):
+        Ephor.holds = {"h1": hold("h1")}
+        self.pusher.step()
+        view = Dash.requests[-1]["body"]["views"]["oversight"]
+        # Same envelope as the other /api/v1 views: Dash rejects a pulled view
+        # whose source is not rebekah-gateway.
+        self.assertEqual((view["schema"], view["source"], view["origin"]),
+                         ("rebekah.oversight.v1", "rebekah-gateway", "ephor"))
+        self.assertFalse(view["stale"])
+        self.assertEqual(view["decisions"], {"oversight": True, "review": True})
+        item = view["items"][0]
+        self.assertEqual((item["request_id"], item["action"], item["risk_level"]), ("h1", "repo.push", "high"))
+        self.assertEqual(item["arguments"], ["branch=main", "force=true"])
+        self.assertRegex(item["deadline"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_an_approval_is_applied_with_the_reviewer_token_and_reported(self):
+        Ephor.holds = {"h1": hold("h1")}
+        self.pusher.step()
+        self.give({"id": "cmd-0000001", "kind": "oversight.decide", "requested_by": "ada@example.com",
+                   "params": {"request_id": "h1", "decision": "approved", "rationale": "Looks right."}})
+        self.clock.t += 30
+        self.assertEqual(self.pusher.step(), 0, "push the new state at once")
+        self.assertEqual(Ephor.holds["h1"]["status"], "approved")
+        self.assertEqual(Ephor.holds["h1"]["reviewer"], "ada@example.com")
+        decide = [c for c in Ephor.calls if c[0] == "/oversight/decide"]
+        self.assertEqual(decide[0][1], "Bearer " + OVERSIGHT_TOKEN)
+        self.assertEqual(self.results()[-1], [{"id": "cmd-0000001", "ok": True, "outcome": "approved"}])
+        self.pusher.step()
+        self.assertEqual(Dash.requests[-1]["path"], "/api/connector/push")
+        self.assertEqual(Dash.requests[-1]["body"]["views"]["oversight"]["items"], [], "no longer pending")
+        self.assertFalse(any(OVERSIGHT_TOKEN in m for m in self.logs))
+
+    def test_a_command_sent_again_is_reported_not_applied_twice(self):
+        Ephor.holds = {"h1": hold("h1")}
+        cmd = {"id": "cmd-0000002", "kind": "oversight.decide", "requested_by": "ada@example.com",
+               "params": {"request_id": "h1", "decision": "denied", "rationale": "No force pushes."}}
+        self.give(cmd, where=("POST", "/api/connector/push"))
+        Dash.reply[("POST", "/api/connector/results")] = (500, {}, {})  # the acknowledgement is lost
+        self.pusher.step()
+        del Dash.reply[("POST", "/api/connector/results")]
+        self.pusher.step()
+        self.assertEqual(len([c for c in Ephor.calls if c[0] == "/oversight/decide"]), 1)
+        self.assertEqual(self.results()[-1][0]["outcome"], "denied")
+        self.assertEqual(self.pusher.unreported, {}, "acknowledged")
+
+    def test_a_late_approval_is_refused_but_a_denial_is_not(self):
+        Ephor.holds = {"late": hold("late", deadline_ms=1000), "late2": hold("late2", deadline_ms=1000)}
+        self.give(
+            {"id": "cmd-0000003", "kind": "oversight.decide", "requested_by": "ada@example.com",
+             "params": {"request_id": "late", "decision": "approved", "rationale": "ok"}},
+            {"id": "cmd-0000004", "kind": "oversight.decide", "requested_by": "ada@example.com",
+             "params": {"request_id": "late2", "decision": "denied", "rationale": "too late anyway"}},
+            where=("POST", "/api/connector/push"))
+        self.pusher.step()
+        by_id = {r["id"]: r for r in self.results()[-1]}
+        self.assertEqual(by_id["cmd-0000003"], {"id": "cmd-0000003", "ok": False, "error": "deadline_passed"})
+        self.assertTrue(by_id["cmd-0000004"]["ok"])
+        self.assertEqual(Ephor.holds["late"]["status"], "pending")
+
+    def test_defer_escalate_and_already_decided(self):
+        Ephor.holds = {"h1": hold("h1"), "h2": hold("h2"), "h3": dict(hold("h3"), status="denied")}
+        before = Ephor.holds["h1"]["deadline_ms"]
+        self.give(
+            {"id": "cmd-0000005", "kind": "oversight.defer", "requested_by": "ada@example.com",
+             "params": {"request_id": "h1", "defer_minutes": 30, "rationale": "Need the owner."}},
+            {"id": "cmd-0000006", "kind": "oversight.escalate", "requested_by": "ada@example.com",
+             "params": {"request_id": "h2", "target_queue": "security", "rationale": "Risky."}},
+            {"id": "cmd-0000007", "kind": "oversight.decide", "requested_by": "ada@example.com",
+             "params": {"request_id": "h3", "decision": "approved", "rationale": "ok"}},
+            where=("POST", "/api/connector/push"))
+        self.pusher.step()
+        by_id = {r["id"]: r for r in self.results()[-1]}
+        self.assertTrue(by_id["cmd-0000005"]["ok"])
+        self.assertEqual(Ephor.holds["h1"]["deadline_ms"], before + 30 * 60000)
+        self.assertTrue(by_id["cmd-0000006"]["ok"])
+        self.assertEqual(Ephor.holds["h2"]["target_queue"], "security")
+        self.assertEqual(by_id["cmd-0000007"], {"id": "cmd-0000007", "ok": False, "error": "not_pending", "outcome": "denied"})
+
+    def test_a_review_is_recorded_in_weftmark_as_the_reviewer(self):
+        self.give({"id": "cmd-0000008", "kind": "review.record", "requested_by": "ada@example.com",
+                   "params": {"change_set_id": "cs-1", "request_changes": "Add a test."}},
+                  where=("POST", "/api/connector/push"))
+        self.pusher.step()
+        path, auth, key, body = WeftMarkControl.reviews[0]
+        self.assertEqual(path, "/v0/control/changes/cs-1/reviews")
+        self.assertEqual(auth, "Bearer " + WRITE_TOKEN)
+        self.assertEqual(key, "dash-cmd-0000008")
+        self.assertEqual(body, {"review_id": "dash-cmd-0000008", "author_id": "ada@example.com",
+                                "request_changes": "Add a test."})
+        self.assertEqual(self.results()[-1], [{"id": "cmd-0000008", "ok": True, "outcome": "blocked"}])
+
+    def test_malformed_commands_are_refused_without_touching_backends(self):
+        self.give(
+            {"id": "cmd-0000009", "kind": "shell.exec", "requested_by": "ada@example.com", "params": {}},
+            {"id": "cmd-0000010", "kind": "oversight.decide", "requested_by": "not an email",
+             "params": {"request_id": "h1", "decision": "approved", "rationale": "x"}},
+            {"id": "cmd-0000011", "kind": "oversight.decide", "requested_by": "ada@example.com",
+             "params": {"request_id": "../../x", "decision": "approved", "rationale": "x"}},
+            {"id": "cmd-0000012", "kind": "oversight.decide", "requested_by": "ada@example.com",
+             "params": {"request_id": "h1", "decision": "approved", "rationale": "  "}},
+            {"id": "cmd-0000013", "kind": "review.record", "requested_by": "ada@example.com",
+             "params": {"change_set_id": "../etc"}},
+            {"id": "x", "kind": "oversight.decide"},
+            where=("POST", "/api/connector/push"))
+        self.pusher.step()
+        errors = {r["id"]: r["error"] for r in self.results()[-1]}
+        self.assertEqual(errors, {"cmd-0000009": "unknown_kind", "cmd-0000010": "bad_actor",
+                                  "cmd-0000011": "bad_request_id", "cmd-0000012": "rationale_required",
+                                  "cmd-0000013": "bad_change_set"})
+        self.assertEqual([c for c in Ephor.calls if c[0] != "/oversight/list"], [])
+        self.assertEqual(WeftMarkControl.reviews, [])
+
+    def test_without_credentials_decisions_are_refused(self):
+        cfg = config(EPHOR_PORT=str(EPHOR_PORT))
+        pusher = gw.DashPusher(cfg, gw.Authenticator(cfg), clock=self.clock, log=self.logs.append)
+        Ephor.holds = {"h1": hold("h1")}
+        self.give({"id": "cmd-0000014", "kind": "oversight.decide", "requested_by": "ada@example.com",
+                   "params": {"request_id": "h1", "decision": "approved", "rationale": "x"}},
+                  {"id": "cmd-0000015", "kind": "review.record", "requested_by": "ada@example.com",
+                   "params": {"change_set_id": "cs-1"}},
+                  where=("POST", "/api/connector/push"))
+        pusher.step()
+        errors = {r["id"]: r["error"] for r in self.results()[-1]}
+        self.assertEqual(errors, {"cmd-0000014": "oversight_not_enabled", "cmd-0000015": "review_not_enabled"})
+        self.assertEqual(Ephor.holds["h1"]["status"], "pending")
+        self.assertEqual(Dash.requests[0]["body"]["views"]["oversight"]["decisions"],
+                         {"oversight": False, "review": False})
 
 
 class GatewayProcessTest(unittest.TestCase):

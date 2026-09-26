@@ -216,6 +216,20 @@ is unreachable, and says so once in its log if Dash rejects the key (rotate it
 in Dash and update the variable). Setting only one of the two variables, a
 non-https URL, or a malformed key stops the gateway from starting.
 
+**Human in the loop.** The pushed views include `oversight`: the actions
+Ephor holds for a human decision (what, why, until when). Reviewers in Dash
+approve, deny, defer or escalate a hold, or record a WeftMark review of a
+Change Set. Dash queues each decision; the gateway picks it up on its next
+poll, applies it to the local Ephor (`/oversight/decide` …) or WeftMark
+(`/v0/control/changes/{id}/reviews`) as that reviewer, and reports the result.
+Nothing needs to reach the instance, so this works behind NAT too. The
+instance stays the authority: it refuses to approve a hold that is no longer
+pending or is past its deadline, and WeftMark decides a review's outcome from
+the evidence. The two credentials this needs are minted per boot and given
+only to the gateway and to Ephor or WeftMark respectively; agents never see
+them, so an agent cannot decide its own hold. `GET /api/v1/oversight` serves
+the same view to authenticated clients.
+
 ## Correlation spine
 
 A governed unit of work must remain traceable across participating services:

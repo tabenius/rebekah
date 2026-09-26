@@ -6,6 +6,7 @@ run_dir="${REBEKAH_RUN_DIR:-/run/rebekah}"
 workspace="${REBEKAH_WORKSPACE:-/workspace}"
 opencode_password_file="$run_dir/opencode-password"
 gateway_token_file="$run_dir/gateway-token"
+weftmark_write_token_file="$run_dir/weftmark-write-token"
 
 ollama_host="${OLLAMA_HOST:-127.0.0.1:11434}"
 default_model="${REBEKAH_OLLAMA_MODEL:-qwen2.5:0.5b}"
@@ -32,6 +33,21 @@ export GIT_CONFIG_VALUE_0="$workspace"
 
 service_names=(ollama opencode sylvae weftmark)
 pids=()
+
+# Secrets the supervisor hands to named services only. Exported (from the
+# image, `docker run -e`, a Podman secret or this script), a variable reaches
+# every service it starts, OpenCode and so its agents included: an agent could
+# read the admin password, push to Dash as this instance, or decide its own
+# review. serve() un-exports them and passes each one, per command, only to the
+# processes listed next to it.
+private_env=(
+  OPENCODE_SERVER_PASSWORD  # opencode, gateway
+  REBEKAH_GATEWAY_TOKEN     # gateway
+  REBEKAH_ADMIN_PASSWORD    # gateway
+  REBEKAH_DASH_PUSH_KEY     # gateway
+  EPHOR_OVERSIGHT_TOKEN     # ephor, gateway
+  EPHOR_AUTH_TOKEN          # none: rebekah-ephor (docker exec) reads it itself
+)
 
 doctor() {
   local failed=0 service
@@ -271,6 +287,12 @@ seed_ledger() {
 }
 
 serve() {
+  local name
+  for name in "${private_env[@]}"; do
+    # shellcheck disable=SC2163 # un-export the variable *named* by $name
+    export -n "$name"
+  done
+
   mkdir -p \
     "$run_dir" \
     "$state_dir/ollama" \
@@ -330,13 +352,13 @@ serve() {
   if [[ -z "${OPENCODE_SERVER_PASSWORD:-}" ]]; then
     OPENCODE_SERVER_PASSWORD="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
   fi
-  export OPENCODE_SERVER_PASSWORD
   ( umask 077; printf '%s' "$OPENCODE_SERVER_PASSWORD" >"$opencode_password_file" )
 
   OLLAMA_MODELS="$state_dir/ollama/models" \
     run_as 10001 "$state_dir/ollama" ollama serve
 
-  XDG_DATA_HOME="$state_dir/opencode/data" \
+  OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" \
+    XDG_DATA_HOME="$state_dir/opencode/data" \
     XDG_CONFIG_HOME="$state_dir/opencode/config" \
     XDG_CACHE_HOME="$state_dir/opencode/cache" \
     run_as 10002 "$state_dir/opencode" \
@@ -350,16 +372,37 @@ serve() {
       --skills-dir "$state_dir/sylvae/skills" \
       --host "$sylvae_host" --port "$sylvae_port"
 
+  # Human-in-the-loop decisions from RAGBAZ Dash (nix/gateway.py) need two
+  # per-boot credentials: one for Ephor's reviewer routes and one for
+  # WeftMark's review control route. Each goes only to the gateway and to the
+  # one backend that checks it, as a per-command environment variable (not
+  # exported), so no other service UID, OpenCode's agents included, inherits
+  # it: the actions being reviewed cannot decide their own review.
+  local oversight_token weftmark_write_token="" wm_help
+  local -a weftmark_control=()
+  oversight_token="${EPHOR_OVERSIGHT_TOKEN:-$(head -c 24 /dev/urandom | base64 | tr -d '\n=')}"
+  # Only a WeftMark with the review capability accepts it; an older one would
+  # refuse to start, so enable it only when it is there.
+  wm_help="$(weftmark-http --help 2>/dev/null || true)"
+  if [[ "$wm_help" =~ [{,]review[,}] ]]; then
+    weftmark_write_token="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
+    ( umask 077; printf '%s' "$weftmark_write_token" >"$weftmark_write_token_file" )
+    chown 10004:10004 "$weftmark_write_token_file"
+    chmod 0400 "$weftmark_write_token_file"
+    weftmark_control=(--write-token-file "$weftmark_write_token_file" --write-capability review)
+  fi
+
   run_as 10004 "$state_dir/weftmark" \
     weftmark-http \
       --repo "$workspace" \
       --ledger "$state_dir/weftmark/ledger.jsonl" \
-      --host "$weftmark_host" --port "$weftmark_port"
+      --host "$weftmark_host" --port "$weftmark_port" \
+      "${weftmark_control[@]}"
 
   # KAGP's local governance bridge is supervised in-container by default. Set
   # REBEKAH_EPHOR_ENABLE=0 and EPHOR_URL to use an external deployment instead.
   if [[ "$ephor_enable" != 0 ]]; then
-    run_as 10006 "$state_dir/ephor" \
+    EPHOR_OVERSIGHT_TOKEN="$oversight_token" run_as 10006 "$state_dir/ephor" \
       governance-http \
         --listen "$ephor_host:$ephor_port" \
         --node-id "${EPHOR_NODE_ID:-rebekah}"
@@ -375,9 +418,14 @@ serve() {
     if [[ -z "${REBEKAH_GATEWAY_TOKEN:-}" ]]; then
       REBEKAH_GATEWAY_TOKEN="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
     fi
-    export REBEKAH_GATEWAY_TOKEN
     ( umask 077; printf '%s' "$REBEKAH_GATEWAY_TOKEN" >"$gateway_token_file" )
-    run_as 10005 "$run_dir" rebekah-gateway
+    OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" \
+      REBEKAH_GATEWAY_TOKEN="$REBEKAH_GATEWAY_TOKEN" \
+      REBEKAH_ADMIN_PASSWORD="${REBEKAH_ADMIN_PASSWORD:-}" \
+      REBEKAH_DASH_PUSH_KEY="${REBEKAH_DASH_PUSH_KEY:-}" \
+      EPHOR_OVERSIGHT_TOKEN="$oversight_token" \
+      REBEKAH_WEFTMARK_WRITE_TOKEN="$weftmark_write_token" \
+      run_as 10005 "$run_dir" rebekah-gateway
   fi
 
   if ! wait_until_healthy; then
