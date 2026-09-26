@@ -340,6 +340,7 @@ class DecisionsTest(unittest.TestCase):
         self.pusher.step()
         view = Dash.requests[-1]["body"]["views"]["oversight"]
         self.assertFalse(view["stale"])
+        self.assertEqual((view["source"], view["enabled"]), ("rebekah-gateway", True))
         self.assertEqual(view["decisions"], {"oversight": True, "review": True})
         item = view["items"][0]
         self.assertEqual((item["request_id"], item["action"], item["risk_level"]), ("h1", "repo.push", "high"))
@@ -363,6 +364,7 @@ class DecisionsTest(unittest.TestCase):
                 pushes = [r for r in Dash.requests if r["path"] == "/api/connector/push"]
                 view = pushes[-1]["body"]["views"]["oversight"]
                 self.assertEqual((view["enabled"], view["stale"], view["items"]), (False, False, []))
+                self.assertEqual(view["source"], "rebekah-gateway")
                 self.assertFalse(view["decisions"]["oversight"])
                 self.assertEqual(pushes[-1]["body"]["views"]["system"]["ephor"]["state"], state or "absent")
                 self.assertEqual(self.results()[-1][0]["error"], "oversight_not_enabled")

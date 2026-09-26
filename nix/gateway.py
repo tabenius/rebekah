@@ -670,7 +670,9 @@ def v1_oversight(cfg):
     return {
         "schema": "rebekah.oversight.v1",
         "observed_at": _iso_now(),
-        "source": "ephor",
+        # The gateway builds this envelope (whether or not Ephor is there);
+        # Dash's pull path accepts only views from rebekah-gateway.
+        "source": "rebekah-gateway",
         "enabled": enabled,
         "ephor": cfg.ephor_state,
         "count": len(items),
