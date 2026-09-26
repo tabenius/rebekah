@@ -289,6 +289,9 @@ docker run --rm \
   rebekah:latest
 ```
 
+To run it as an unprivileged host user under rootless Podman, with systemd,
+Podman secrets and a pinned digest, see [`deploy/podman/`](deploy/podman/README.md).
+
 The entrypoint initializes volume ownership for the five isolated service UIDs.
 The mounted workspace is the only Git safe-directory exception configured by
 the runtime.

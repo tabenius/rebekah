@@ -40,6 +40,9 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   follow); System is four-state service health (`/api/v1/system`); Advanced is
   the authenticated API console.
 - `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
+- `deploy/podman/` — rootless Podman deployment: `rebekah-run` (the
+  least-privilege run, Podman secrets as container-only env, pinned digest),
+  a systemd user unit, and setup notes (workspace ACLs for UIDs 10002/10004).
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
 - `tests/gateway.sh` + `tests/gateway-oidc.py` — gateway auth/proxy unit test

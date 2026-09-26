@@ -1,0 +1,19 @@
+# Rebekah as a systemd user service under rootless Podman.
+# Install: ~/.config/systemd/user/rebekah.service, with rebekah-run in ~/bin
+# and settings in ~/.config/rebekah/rebekah.env (see README.md here).
+[Unit]
+Description=Rebekah (rootless Podman)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/rebekah/rebekah.env
+ExecStart=%h/bin/rebekah-run
+# The supervisor exits 0 on a requested stop; rebekah-run passes its --name.
+ExecStop=/usr/bin/podman stop --ignore -t 30 ${REBEKAH_NAME}
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
