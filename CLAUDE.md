@@ -133,7 +133,8 @@ them in any change:
    - Three auth schemes, any sufficient: a **SQLite username/password** login
      (the default browser sign-in — `scrypt` hashes + opaque bearer sessions in
      the `0700` state dir; seeds a default `admin`, password provided via
-     `REBEKAH_ADMIN_PASSWORD` or generated + logged once); a static bearer
+     `REBEKAH_ADMIN_PASSWORD` or generated into `initial-admin-password`, `0600`
+     beside the DB, and never logged); a static bearer
      **token** (internal / LAN / CI; constant-time compared); and **OIDC** JWT
      bearer verified against the issuer's JWKS (external / SSO / HITL). sqlite3 +
      scrypt are stdlib and PyJWT is imported lazily, so the token/password paths

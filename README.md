@@ -104,8 +104,11 @@ schemes flagship agent/kanban orchestrators use, and a request is accepted if
 **Signing in (default).** The console shows a username/password form. On first
 boot the gateway seeds an `admin` user (`REBEKAH_ADMIN_USER`) into a SQLite DB in
 its `0700` state dir, hashing passwords with `scrypt`. Set `REBEKAH_ADMIN_PASSWORD`
-for a known password; otherwise a random one is generated and **logged once** at
-startup — read it with `docker logs <container> | grep 'seeded admin'`. Login
+for a known password; otherwise a random one is generated into
+`/var/lib/rebekah/gateway/initial-admin-password` (`0600`). It is never logged,
+since container logs outlive "shown once" in the host's journal. Read it, then
+delete the file:
+`docker exec <container> sh -c 'cat /var/lib/rebekah/gateway/initial-admin-password && rm /var/lib/rebekah/gateway/initial-admin-password'`. Login
 mints an opaque bearer session (`REBEKAH_SESSION_TTL`, default 12h); `POST
 /api/logout` revokes it. Only session-token hashes are stored.
 
