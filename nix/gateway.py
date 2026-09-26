@@ -39,6 +39,7 @@ import json
 import mimetypes
 import os
 import posixpath
+import re
 import secrets
 import sqlite3
 import ssl
@@ -63,6 +64,13 @@ HOP_BY_HOP = {
 def _split_hostport(value, default_port):
     host, _, port = value.partition(":")
     return host or "127.0.0.1", int(port) if port else default_port
+
+
+def _int_env(env, name, default):
+    try:
+        return int(env.get(name, str(default)))
+    except ValueError:
+        return -1  # reported by validate()
 
 
 def _iso_now():
@@ -144,6 +152,18 @@ class Config:
         self.admin_password = env.get("REBEKAH_ADMIN_PASSWORD", "")
         self.session_ttl = int(env.get("REBEKAH_SESSION_TTL", str(12 * 3600)))
 
+        # Pushing to RAGBAZ Dash (optional). For an instance with no public
+        # address: the gateway calls out to Dash over https with a push key
+        # issued there, and Dash never connects in. Both must be set, or neither.
+        self.dash_url = env.get("REBEKAH_DASH_URL", "").strip().rstrip("/")
+        self.dash_push_key = env.get("REBEKAH_DASH_PUSH_KEY", "").strip()
+        self.dash_poll = _int_env(env, "REBEKAH_DASH_POLL_INTERVAL", 30)
+        self.dash_heartbeat = _int_env(env, "REBEKAH_DASH_PUSH_INTERVAL", 300)
+
+    @property
+    def dash_enabled(self):
+        return bool(self.dash_url or self.dash_push_key)
+
     @property
     def tls_enabled(self):
         return bool(self.tls_cert and self.tls_key)
@@ -179,6 +199,8 @@ class Config:
             problems.append("REBEKAH_GATEWAY_TLS_CERT set without REBEKAH_GATEWAY_TLS_KEY")
         if self.tls_key and not self.tls_cert:
             problems.append("REBEKAH_GATEWAY_TLS_KEY set without REBEKAH_GATEWAY_TLS_CERT")
+        if self.dash_enabled:
+            problems.extend(dash_problems(self))
         if not self.backends:
             problems.append(
                 "no exposed backends: set REBEKAH_GATEWAY_EXPOSE to a subset of "
@@ -380,6 +402,135 @@ class Authenticator:
 
 # --- proxy -------------------------------------------------------------------
 
+# --- versioned aggregation payloads (docs/HUMAN-INTERFACE-PLAN.md §10) -------
+# Built here, outside the request handler, so the Dash pusher (below) sends
+# exactly what GET /api/v1/{system,attention,change-sets} serves.
+
+def backend_get_json(cfg, name, path):
+    """Internal GET to a loopback backend (auth injected as the proxy does).
+
+    Returns parsed JSON or None on any failure -- callers degrade to a "stale"
+    result, never an error.
+    """
+    backend = cfg.backends.get(name)
+    if backend is None:
+        return None
+    host, port, upstream_auth = backend
+    headers = {"Host": "%s:%d" % (host, port)}
+    if upstream_auth is not None:
+        user, pw = upstream_auth
+        headers["Authorization"] = "Basic " + base64.b64encode(
+            ("%s:%s" % (user, pw)).encode()).decode()
+    conn = None
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=min(cfg.timeout, 5))
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        raw = resp.read()
+        if resp.status != 200:
+            return None
+        return json.loads(raw)
+    except Exception:  # noqa: BLE001 -- degrade, never leak
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def fetch_kanban(cfg):
+    """WeftMark's kanban projection, or None when it is not exposed/reachable."""
+    if "weftmark" not in cfg.backends:
+        return None
+    return backend_get_json(cfg, "weftmark", "/v0/kanban")
+
+
+def auth_schemes(cfg, auth):
+    schemes = []
+    if cfg.token_enabled:
+        schemes.append("token")
+    if auth.password_active:
+        schemes.append("password")
+    if cfg.oidc_enabled:
+        schemes.append("oidc")
+    return schemes
+
+
+def v1_system(cfg, auth):
+    backends = {nm: {"route": "/" + nm + "/"} for nm in sorted(cfg.backends)}
+    return {
+        "schema": "rebekah.system.v1",
+        "observed_at": _iso_now(),
+        "source": "rebekah-gateway",
+        "service": "rebekah-gateway",
+        "auth": auth_schemes(cfg, auth),
+        "ui": cfg.ui_enabled,
+        "backends": backends,
+        # Ephor is optional: present it as installed-or-not, never as a
+        # failed baseline service (plan §1, §6.8).
+        "ephor": {"exposed": "ephor" in cfg.backends, "optional": True},
+    }
+
+
+def v1_attention(kanban):
+    items = []
+    stale = not isinstance(kanban, dict)
+    if not stale:
+        for card in (kanban.get("cards") or []):
+            for reason in (card.get("attention") or []):
+                items.append({
+                    "id": card.get("id"), "kind": "change_set",
+                    "title": card.get("title") or card.get("id"),
+                    "lane": card.get("lane"), "reason": reason,
+                    "change_set": card.get("id"), "source": "weftmark",
+                })
+        for card in (kanban.get("plan_cards") or []):
+            for reason in (card.get("attention") or []):
+                items.append({
+                    "id": card.get("id"), "kind": "task",
+                    "title": card.get("title") or card.get("id"),
+                    "lane": card.get("lane"), "reason": reason,
+                    "source": "weftmark",
+                })
+    return {
+        "schema": "rebekah.attention.v1",
+        "observed_at": _iso_now(),
+        "source": "rebekah-gateway",
+        "count": len(items),
+        "stale": stale,
+        "items": items,
+    }
+
+
+def v1_changesets(kanban):
+    stale = not isinstance(kanban, dict)
+    items = []
+    if not stale:
+        for card in (kanban.get("cards") or []):
+            if card.get("kind") != "change_set":
+                continue
+            ev = card.get("evidence") or {}
+            items.append({
+                "id": card.get("id"),
+                "title": card.get("title") or card.get("id"),
+                "lane": card.get("lane"),
+                "lifecycle_state": card.get("lifecycle_state"),
+                "readiness": card.get("readiness"),
+                "evidence": {"total": ev.get("total"), "current": ev.get("current")},
+                "attention": card.get("attention") or [],
+            })
+    return {
+        "schema": "rebekah.change-set-list.v1",
+        "observed_at": _iso_now(),
+        "source": "rebekah-gateway",
+        "count": len(items),
+        "stale": stale,
+        "items": items,
+    }
+
+
 def make_handler(cfg, auth):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -472,35 +623,7 @@ def make_handler(cfg, auth):
             return principal
 
         def _backend_get_json(self, name, path):
-            # Internal GET to a loopback backend (auth injected as the proxy does),
-            # for the aggregation endpoints. Returns parsed JSON or None on any
-            # failure -- the caller degrades to a "stale" result, never an error.
-            backend = cfg.backends.get(name)
-            if backend is None:
-                return None
-            host, port, upstream_auth = backend
-            headers = {"Host": "%s:%d" % (host, port)}
-            if upstream_auth is not None:
-                user, pw = upstream_auth
-                headers["Authorization"] = "Basic " + base64.b64encode(
-                    ("%s:%s" % (user, pw)).encode()).decode()
-            conn = None
-            try:
-                conn = http.client.HTTPConnection(host, port, timeout=min(cfg.timeout, 5))
-                conn.request("GET", path, headers=headers)
-                resp = conn.getresponse()
-                raw = resp.read()
-                if resp.status != 200:
-                    return None
-                return json.loads(raw)
-            except Exception:  # noqa: BLE001 -- degrade, never leak
-                return None
-            finally:
-                if conn is not None:
-                    try:
-                        conn.close()
-                    except Exception:  # noqa: BLE001
-                        pass
+            return backend_get_json(cfg, name, path)
 
         # --- versioned aggregation API (docs/HUMAN-INTERFACE-PLAN.md §10) -----
         # The console consumes these instead of reverse-engineering each backend.
@@ -528,61 +651,12 @@ def make_handler(cfg, auth):
         def _serve_v1_system(self):
             if self._authed() is None:
                 return
-            schemes = []
-            if cfg.token_enabled:
-                schemes.append("token")
-            if auth.password_active:
-                schemes.append("password")
-            if cfg.oidc_enabled:
-                schemes.append("oidc")
-            backends = {nm: {"route": "/" + nm + "/"} for nm in sorted(cfg.backends)}
-            self._json(200, {
-                "schema": "rebekah.system.v1",
-                "observed_at": _iso_now(),
-                "source": "rebekah-gateway",
-                "service": "rebekah-gateway",
-                "auth": schemes,
-                "ui": cfg.ui_enabled,
-                "backends": backends,
-                # Ephor is optional: present it as installed-or-not, never as a
-                # failed baseline service (plan §1, §6.8).
-                "ephor": {"exposed": "ephor" in cfg.backends, "optional": True},
-            })
+            self._json(200, v1_system(cfg, auth))
 
         def _serve_v1_attention(self):
             if self._authed() is None:
                 return
-            items = []
-            stale = False
-            data = self._backend_get_json("weftmark", "/v0/kanban") \
-                if "weftmark" in cfg.backends else None
-            if not isinstance(data, dict):
-                stale = True
-            else:
-                for card in (data.get("cards") or []):
-                    for reason in (card.get("attention") or []):
-                        items.append({
-                            "id": card.get("id"), "kind": "change_set",
-                            "title": card.get("title") or card.get("id"),
-                            "lane": card.get("lane"), "reason": reason,
-                            "change_set": card.get("id"), "source": "weftmark",
-                        })
-                for card in (data.get("plan_cards") or []):
-                    for reason in (card.get("attention") or []):
-                        items.append({
-                            "id": card.get("id"), "kind": "task",
-                            "title": card.get("title") or card.get("id"),
-                            "lane": card.get("lane"), "reason": reason,
-                            "source": "weftmark",
-                        })
-            self._json(200, {
-                "schema": "rebekah.attention.v1",
-                "observed_at": _iso_now(),
-                "source": "rebekah-gateway",
-                "count": len(items),
-                "stale": stale,
-                "items": items,
-            })
+            self._json(200, v1_attention(fetch_kanban(cfg)))
 
         # --- Change Set as the visible spine (plan §11 / §14.6) --------------
         # /api/v1/change-sets[/{id}] projects WeftMark's kanban into a change-set
@@ -593,32 +667,7 @@ def make_handler(cfg, auth):
         def _serve_v1_changesets(self):
             if self._authed() is None:
                 return
-            data = self._backend_get_json("weftmark", "/v0/kanban") \
-                if "weftmark" in cfg.backends else None
-            stale = not isinstance(data, dict)
-            items = []
-            if not stale:
-                for card in (data.get("cards") or []):
-                    if card.get("kind") != "change_set":
-                        continue
-                    ev = card.get("evidence") or {}
-                    items.append({
-                        "id": card.get("id"),
-                        "title": card.get("title") or card.get("id"),
-                        "lane": card.get("lane"),
-                        "lifecycle_state": card.get("lifecycle_state"),
-                        "readiness": card.get("readiness"),
-                        "evidence": {"total": ev.get("total"), "current": ev.get("current")},
-                        "attention": card.get("attention") or [],
-                    })
-            self._json(200, {
-                "schema": "rebekah.change-set-list.v1",
-                "observed_at": _iso_now(),
-                "source": "rebekah-gateway",
-                "count": len(items),
-                "stale": stale,
-                "items": items,
-            })
+            self._json(200, v1_changesets(fetch_kanban(cfg)))
 
         def _serve_v1_changeset(self, cs_id):
             if self._authed() is None:
@@ -891,6 +940,184 @@ def make_handler(cfg, auth):
     return Handler
 
 
+# --- pushing to RAGBAZ Dash (optional; outbound only) --------------------------
+# An instance behind NAT has no address Dash could pull from. With
+# REBEKAH_DASH_URL + REBEKAH_DASH_PUSH_KEY set, a background thread sends Dash
+# the same three /api/v1 payloads the gateway serves, whenever they change and
+# at least every REBEKAH_DASH_PUSH_INTERVAL seconds, and polls Dash every
+# REBEKAH_DASH_POLL_INTERVAL seconds for a "refresh requested" flag (someone
+# clicked Refresh in Dash), pushing at once when it is set. Nothing listens:
+# no inbound port is opened. The push key is sent only in the Authorization
+# header to that one origin over verified TLS, and never logged.
+
+DASH_PUSH_KEY_RE = re.compile(r"^rbkp_[0-9a-f]{12}_[A-Za-z0-9_-]{43}$")
+DASH_ENVELOPE = "rebekah.dash-push.v1"
+DASH_MAX_RESPONSE = 64 * 1024
+DASH_TIMEOUT = 10
+DASH_MAX_BACKOFF = 900
+
+
+def dash_problems(cfg):
+    problems = []
+    if not (cfg.dash_url and cfg.dash_push_key):
+        problems.append("set both REBEKAH_DASH_URL and REBEKAH_DASH_PUSH_KEY, or neither")
+        return problems
+    url = urllib.parse.urlsplit(cfg.dash_url)
+    host = (url.hostname or "").lower()
+    if url.scheme == "http" and host in LOOPBACK:
+        pass  # a local Dash (wrangler dev) or a test double
+    elif url.scheme != "https":
+        problems.append("REBEKAH_DASH_URL must be https:// (plain http only to loopback)")
+    if not host or url.username or url.password or url.query or url.fragment:
+        problems.append("REBEKAH_DASH_URL must be a plain origin, e.g. https://dash.ragbaz.cc")
+    if not DASH_PUSH_KEY_RE.match(cfg.dash_push_key):
+        problems.append("REBEKAH_DASH_PUSH_KEY is not a Dash push key (rbkp_...)")
+    if cfg.dash_poll < 10:
+        problems.append("REBEKAH_DASH_POLL_INTERVAL must be an integer >= 10 (seconds)")
+    if cfg.dash_heartbeat < max(cfg.dash_poll, 10):
+        problems.append("REBEKAH_DASH_PUSH_INTERVAL must be an integer >= the poll interval")
+    return problems
+
+
+class DashPusher:
+    """Push this instance's /api/v1 views to Dash; see the section comment."""
+
+    def __init__(self, cfg, auth, clock=time.monotonic, log=None):
+        self.cfg = cfg
+        self.auth = auth
+        self.clock = clock
+        self.log = log or (lambda msg: sys.stderr.write("rebekah-gateway: dash: " + msg + "\n"))
+        url = urllib.parse.urlsplit(cfg.dash_url)
+        self._https = url.scheme == "https"
+        self._host = url.hostname
+        self._port = url.port or (443 if self._https else 80)
+        self._prefix = url.path.rstrip("/")
+        self.last_digest = None
+        self.last_push = None
+        self.refresh = False
+        self.failures = 0
+        self._state = None  # last logged state, so the log shows transitions only
+
+    def views(self):
+        kanban = fetch_kanban(self.cfg)
+        return {
+            "system": v1_system(self.cfg, self.auth),
+            "attention": v1_attention(kanban),
+            "change-sets": v1_changesets(kanban),
+        }
+
+    @staticmethod
+    def digest(views):
+        # What changed, ignoring the timestamps every build carries.
+        stable = {k: {f: v for f, v in view.items() if f != "observed_at"} for k, view in views.items()}
+        return hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest()
+
+    def _note(self, state, msg):
+        if state != self._state:
+            self._state = state
+            self.log(msg)
+
+    def _call(self, method, path, body=None):
+        """(status, parsed JSON or None, Retry-After seconds or None). Raises OSError."""
+        headers = {
+            "Authorization": "Bearer " + self.cfg.dash_push_key,
+            "Accept": "application/json",
+            "User-Agent": "rebekah-gateway/dash-push",
+        }
+        payload = None
+        if body is not None:
+            payload = json.dumps(body, separators=(",", ":")).encode()
+            headers["Content-Type"] = "application/json"
+        if self._https:
+            conn = http.client.HTTPSConnection(
+                self._host, self._port, timeout=DASH_TIMEOUT,
+                context=ssl.create_default_context())
+        else:
+            conn = http.client.HTTPConnection(self._host, self._port, timeout=DASH_TIMEOUT)
+        try:
+            # http.client never follows redirects; a 3xx is just a failure here.
+            conn.request(method, self._prefix + path, body=payload, headers=headers)
+            resp = conn.getresponse()
+            raw = resp.read(DASH_MAX_RESPONSE + 1)
+            retry = resp.getheader("Retry-After")
+        finally:
+            conn.close()
+        data = None
+        if len(raw) <= DASH_MAX_RESPONSE:
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = None
+        try:
+            retry = int(retry) if retry is not None else None
+        except ValueError:
+            retry = None
+        return resp.status, data if isinstance(data, dict) else None, retry
+
+    def _failed(self, why):
+        self.failures += 1
+        self._note("failing", "cannot reach Dash (%s); retrying with backoff" % why)
+        return min(self.cfg.dash_poll * (2 ** min(self.failures, 10)), DASH_MAX_BACKOFF)
+
+    def step(self):
+        """One round: push if due, else poll for a refresh request.
+
+        Returns the seconds to wait before the next round.
+        """
+        now = self.clock()
+        views = self.views()
+        digest = self.digest(views)
+        due = (self.refresh or digest != self.last_digest or self.last_push is None
+               or now - self.last_push >= self.cfg.dash_heartbeat)
+        try:
+            if due:
+                status, data, retry = self._call(
+                    "POST", "/api/connector/push", {"schema": DASH_ENVELOPE, "views": views})
+            else:
+                status, data, retry = self._call("GET", "/api/connector/pending")
+        except (OSError, http.client.HTTPException) as exc:
+            return self._failed(type(exc).__name__)
+
+        if status == 401 or status == 403:
+            self.failures += 1
+            self._note("rejected", "Dash rejected the push key (HTTP %d); issue a new one in Dash "
+                                   "and update REBEKAH_DASH_PUSH_KEY" % status)
+            return DASH_MAX_BACKOFF
+        if status == 429:
+            return max(retry or (data or {}).get("retry_after") or self.cfg.dash_poll, 1)
+        if status != 200:
+            error = (data or {}).get("error") or "HTTP %d" % status
+            return self._failed("Dash answered %s" % error)
+
+        self.failures = 0
+        if due:
+            self.last_digest = digest
+            self.last_push = now
+            self.refresh = bool((data or {}).get("refresh_requested"))
+            self._note("ok", "pushing to %s" % self.cfg.dash_url)
+            return self.cfg.dash_poll
+        self.refresh = bool((data or {}).get("refresh_requested"))
+        self._note("ok", "pushing to %s" % self.cfg.dash_url)
+        # Someone asked for fresh data: push now, not at the next poll.
+        return 0 if self.refresh else self.cfg.dash_poll
+
+    def run(self, stop):
+        delay = 1  # let the backends come up
+        while not stop.wait(delay):
+            try:
+                delay = self.step()
+            except Exception as exc:  # noqa: BLE001 -- never kill the gateway
+                delay = self._failed(type(exc).__name__)
+
+
+def start_dash_pusher(cfg, auth):
+    stop = threading.Event()
+    pusher = DashPusher(cfg, auth)
+    thread = threading.Thread(target=pusher.run, args=(stop,), name="dash-push", daemon=True)
+    thread.start()
+    return stop
+
+
 def build_server(cfg, auth):
     httpd = ThreadingHTTPServer((cfg.host, cfg.port), make_handler(cfg, auth))
     httpd.daemon_threads = True
@@ -926,6 +1153,12 @@ def main(argv=None):
         % (scheme, cfg.host, cfg.port, ",".join(schemes), ",".join(sorted(cfg.backends)))
     )
     httpd = build_server(cfg, auth)
+    if cfg.dash_enabled:
+        start_dash_pusher(cfg, auth)
+        sys.stderr.write(
+            "rebekah-gateway: pushing to %s every %ds (checks every %ds)\n"
+            % (cfg.dash_url, cfg.dash_heartbeat, cfg.dash_poll)
+        )
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

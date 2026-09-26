@@ -27,6 +27,10 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   console consumes instead of reverse-engineering each backend — every response
   carries a `schema`, `source`, and `observed_at` (see
   `docs/HUMAN-INTERFACE-PLAN.md` and `docs/UI-INSPIRATION-RAGBAZ-KANBAN.md`).
+  Those payloads are built by module-level `v1_*` functions, which the
+  optional **Dash pusher** (`DashPusher`, a daemon thread started when
+  `REBEKAH_DASH_URL` + `REBEKAH_DASH_PUSH_KEY` are set) also sends to RAGBAZ
+  Dash (`POST /api/connector/push`, poll `GET /api/connector/pending`).
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin).
   Goal-based nav (Work / Review / Runs / Models / System / Advanced): Work is the
   WeftMark board (five lanes on desktop, a single attention-first list with a
@@ -40,6 +44,8 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
 - `tests/gateway.sh` + `tests/gateway-oidc.py` — gateway auth/proxy unit test
   (token + fail-closed guards on stdlib; OIDC when PyJWT is present).
+- `tests/dash-push.py` — the Dash push client against mock WeftMark and Dash
+  (stdlib `unittest`, fake clock, one real gateway process).
 
 ## Build & validate
 
@@ -146,6 +152,14 @@ them in any change:
      `/run/rebekah/gateway-token`) and passed to the gateway via env, never
      argv. Guarded by `tests/gateway.sh` and `tests/smoke.sh`. No extra
      capability is required; do not add one.
+   - **Pushing to Dash is outbound only** and opens no listener. It calls one
+     configured origin (`https://`, or plain http to loopback only), verifies
+     TLS, never follows redirects, caps what it reads, and backs off on
+     failure. `REBEKAH_DASH_PUSH_KEY` comes from the environment, travels only
+     in the `Authorization` header, and is never logged. It sends exactly the
+     `v1_*` payloads the gateway serves, nothing from the backends beyond
+     them. A half or invalid push configuration refuses to start. Guarded by
+     `tests/dash-push.py`.
    - The built-in web console (`nix/ui/`) is served static and same-origin
      (`GET`/`HEAD` only, path-traversal-safe, strict CSP with `connect-src
      'self'`). The page shell is public; every data call it makes is

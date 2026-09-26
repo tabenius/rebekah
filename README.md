@@ -185,6 +185,34 @@ alongside) the token:
 Set `REBEKAH_GATEWAY_ENABLE=0` to run without the gateway (loopback services
 only).
 
+### Reporting to RAGBAZ Dash
+
+[RAGBAZ Dash](https://dash.ragbaz.cc/) shows an instance's Work, Review and
+System views. It gets them in either or both of two ways:
+
+- **Dash pulls**: the gateway has a public https address (a Cloudflare Tunnel,
+  say). Link it in Dash with that address and a gateway token.
+- **The instance pushes**: no public address needed (behind NAT or a
+  firewall). In Dash, an owner or admin of the instance issues a push key;
+  set it on the container:
+
+```bash
+  -e REBEKAH_DASH_URL=https://dash.ragbaz.cc \
+  -e REBEKAH_DASH_PUSH_KEY="rbkp_…" \
+  # optional: -e REBEKAH_DASH_POLL_INTERVAL=30   (seconds, >= 10)
+  #           -e REBEKAH_DASH_PUSH_INTERVAL=300  (heartbeat, >= the poll interval)
+```
+
+The gateway then sends Dash its `/api/v1/system`, `/attention` and
+`/change-sets` payloads whenever they change and at least every
+`REBEKAH_DASH_PUSH_INTERVAL` seconds, and checks every
+`REBEKAH_DASH_POLL_INTERVAL` seconds whether someone clicked **Refresh** in
+Dash, pushing at once if so. It only calls out, over verified TLS, to that one
+origin; it opens no port and never follows redirects. It backs off when Dash
+is unreachable, and says so once in its log if Dash rejects the key (rotate it
+in Dash and update the variable). Setting only one of the two variables, a
+non-https URL, or a malformed key stops the gateway from starting.
+
 ## Correlation spine
 
 A governed unit of work must remain traceable across participating services:
@@ -344,6 +372,8 @@ five services, including a real Ephor capture/finalize governance cycle.
 - `tests/smoke.sh` verifies the loaded image through Docker.
 - `tests/gateway.sh` (+ `tests/gateway-oidc.py`) unit-tests the gateway's auth,
   routing, and fail-closed guards.
+- `tests/dash-push.py` tests the push client for RAGBAZ Dash against mock
+  WeftMark and Dash servers.
 - `docs/bootstrap-contract.md` defines integration semantics and acceptance
   criteria.
 - `docs/ephor-governance-worker.md` references the merged Ephor governance
