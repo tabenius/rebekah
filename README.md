@@ -279,7 +279,7 @@ docker run --rm \
   --cap-add=SETUID --cap-add=SETGID --cap-add=KILL \
   --security-opt=no-new-privileges \
   --tmpfs /run/rebekah:rw,noexec,nosuid,size=16m \
-  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --mount type=volume,src=rebekah-state,dst=/var/lib/rebekah \
   --mount type=bind,src="$PWD",dst=/workspace \
   -e REBEKAH_CHANGE_SET_ID=your-change-set-id \

@@ -248,9 +248,12 @@ serve() {
     "$state_dir/weftmark" \
     "$state_dir/ephor" \
     "$state_dir/gateway"
-  # chmod before chown: while root still owns these dirs the mode change needs
-  # no CAP_FOWNER, so the container can run without it. chown -R preserves the
-  # mode.
+  # chmod while root owns these dirs, so the mode change needs no CAP_FOWNER
+  # and the container can run without it. On a restart with a persistent state
+  # volume they already belong to the service UIDs, so take them back first
+  # (CAP_CHOWN; the services are not running yet). chown -R then hands them out
+  # again and preserves the mode.
+  chown 0:0 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor,gateway}
   chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor}
   # The gateway state holds the SQLite auth DB (password hashes + sessions):
   # tighter than the others (0700), readable only by the gateway UID.
