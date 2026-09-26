@@ -172,8 +172,15 @@ them in any change:
    `DAC_OVERRIDE` (a root `docker exec` of `rebekah-govern` writes the
    weftmark-owned ledger). The README run example and `tests/smoke.sh` run with
    `--cap-drop=ALL` plus exactly those five and `--security-opt=no-new-privileges`;
-   keep `serve()`'s `chmod` before its `chown` so no `CAP_FOWNER` is needed, and
-   don't add capabilities without updating both.
+   keep `serve()` taking the state dirs back to root and `chmod`ing them before
+   its `chown -R`, so no `CAP_FOWNER` is needed on a first start *or* a restart
+   with persistent state, and don't add capabilities without updating both.
+   Guarded by the restart in `tests/smoke.sh`.
+9. **Prompt, clean stop.** TERM/INT make the supervisor stop its services
+   (TERM, then KILL after `REBEKAH_STOP_TIMEOUT`, default 20 s) and exit 0,
+   at any point in `serve()`, including the startup health loop. A service
+   exiting on its own is still a failure (exit 1). Guarded by the stop check in
+   `tests/smoke.sh`.
 
 ## Conventions
 

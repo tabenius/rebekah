@@ -190,7 +190,20 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
-    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, SQLite login, web console, and restart are healthy\n'
+    # A requested stop is prompt and clean: the supervisor forwards TERM, waits
+    # for its services, and exits 0 well inside the runtime's stop timeout.
+    stop_started=$SECONDS
+    "$runtime" stop -t 30 "$name" >/dev/null
+    stop_seconds=$((SECONDS - stop_started))
+    stop_code="$("$runtime" inspect -f '{{.State.ExitCode}}' "$name")"
+    if ((stop_seconds > 15)) || [[ "$stop_code" != 0 ]]; then
+      printf 'failed: stop took %ss with exit code %s (want <= 15s, 0)\n' \
+        "$stop_seconds" "$stop_code" >&2
+      "$runtime" logs --tail 20 "$name" >&2 || true
+      exit 1
+    fi
+
+    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, SQLite login, web console, restart, and clean stop are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then

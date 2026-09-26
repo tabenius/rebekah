@@ -181,13 +181,45 @@ run_as() {
   pids+=("$!")
 }
 
+# Stop every service: TERM, then up to REBEKAH_STOP_TIMEOUT seconds (default
+# 20, under Docker's and Podman's usual stop timeouts) for them to exit, then
+# KILL whatever is left, so a stop is bounded even if a service ignores TERM.
 stop_services() {
-  local pid
+  local pid alive deadline
   trap - TERM INT
   for pid in "${pids[@]:-}"; do
     kill -TERM "$pid" 2>/dev/null || true
   done
+  deadline=$((SECONDS + ${REBEKAH_STOP_TIMEOUT:-20}))
+  while ((SECONDS < deadline)); do
+    alive=0
+    for pid in "${pids[@]:-}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+        break
+      fi
+    done
+    ((alive)) || break
+    sleep 0.2
+  done
+  for pid in "${pids[@]:-}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      printf 'rebekah: pid %s ignored TERM, killing it\n' "$pid" >&2
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
   wait || true
+}
+
+# A requested stop (TERM from docker/podman stop, INT from Ctrl-C) is not a
+# failure: stop the services and exit 0 at once, wherever serve() was, startup
+# health loop included. Without the exit, the trap returned into the loop and
+# the container ran on until the runtime's stop timeout killed it.
+on_stop_signal() {
+  printf 'rebekah: stop requested, stopping services\n'
+  stop_services
+  printf 'rebekah: stopped\n'
+  exit 0
 }
 
 wait_until_healthy() {
@@ -288,7 +320,7 @@ serve() {
 
   doctor
   seed_ledger
-  trap stop_services TERM INT
+  trap on_stop_signal TERM INT
 
   # Secure the OpenCode HTTP surface. Unauthenticated, any co-tenant service
   # (or anything else reaching container loopback) can drive OpenCode, which has
