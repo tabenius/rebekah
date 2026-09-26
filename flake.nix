@@ -54,7 +54,7 @@
           gateway = pkgs.runCommand "rebekah-gateway-check" {
             nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.pyjwt ps.cryptography ])) ];
           } ''
-            python3 -m py_compile ${./nix/gateway.py} ${./tests/gateway-oidc.py}
+            python3 -m py_compile ${./nix/gateway.py} ${./tests/gateway-oidc.py} ${./tests/dash-push.py}
             touch $out
           '';
           inherit (self.packages.${system}) weftmark sylvae ephor;
