@@ -48,13 +48,13 @@
           shell = pkgs.runCommand "rebekah-shell-checks" {
             nativeBuildInputs = [ pkgs.shellcheck ];
           } ''
-            shellcheck --severity=warning ${./nix/entrypoint.sh} ${./nix/ephor-connector.sh} ${./nix/govern.sh} ${./tests/ephor-connector.sh} ${./tests/smoke.sh} ${./tests/gateway.sh}
+            shellcheck --severity=warning ${./nix/entrypoint.sh} ${./nix/ephor-connector.sh} ${./nix/govern.sh} ${./tests/ephor-connector.sh} ${./tests/smoke.sh} ${./tests/gateway.sh} ${./deploy/podman/rebekah-run}
             touch $out
           '';
           gateway = pkgs.runCommand "rebekah-gateway-check" {
             nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.pyjwt ps.cryptography ])) ];
           } ''
-            python3 -m py_compile ${./nix/gateway.py} ${./tests/gateway-oidc.py}
+            python3 -m py_compile ${./nix/gateway.py} ${./tests/gateway-oidc.py} ${./tests/dash-push.py}
             touch $out
           '';
           inherit (self.packages.${system}) weftmark sylvae ephor;

@@ -114,7 +114,8 @@ dockerTools.buildLayeredImage {
       "REBEKAH_GATEWAY_UI_DIR=/usr/local/share/rebekah/ui"
       # Default browser login: SQLite username/password. On first boot the
       # gateway seeds an admin user; provide REBEKAH_ADMIN_PASSWORD or a random
-      # one is generated and logged once. DB lives on the persistent state dir.
+      # one is generated into /var/lib/rebekah/gateway/initial-admin-password
+      # (0600), never logged. DB lives on the persistent state dir.
       "REBEKAH_AUTH_PASSWORD=1"
       "REBEKAH_AUTH_DB=/var/lib/rebekah/gateway/auth.db"
       "REBEKAH_ADMIN_USER=admin"

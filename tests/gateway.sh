@@ -344,6 +344,33 @@ code -X POST -H "Authorization: Bearer $sess" "$pbase/api/logout" >/dev/null
 [ "$(code -H "Authorization: Bearer $sess" "$pbase/api/info")" = 401 ] \
   && pass "logout revokes the session" || fail "session still valid after logout"
 
+# A generated admin password goes to a 0600 file beside the auth DB, never to
+# the log (container logs land in the host journal).
+gen_port="$(free_port)"
+mkdir -p "$work/gen"
+REBEKAH_GATEWAY_PORT="$gen_port" REBEKAH_AUTH_PASSWORD=1 REBEKAH_AUTH_DB="$work/gen/auth.db" \
+  REBEKAH_ADMIN_USER=admin \
+  REBEKAH_GATEWAY_EXPOSE=weftmark WEFTMARK_HOST=127.0.0.1 WEFTMARK_PORT="$up_port" \
+  "$python" "$gateway" >"$work/gwgen.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$gen_port/healthz" || fail "generated-password gateway did not start"
+gen_file="$work/gen/initial-admin-password"
+[ -s "$gen_file" ] && pass "generated admin password written to a file" \
+  || fail "no initial-admin-password file"
+[ "$(stat -c %a "$gen_file")" = 600 ] && pass "password file is 0600" \
+  || fail "password file mode $(stat -c %a "$gen_file")"
+gen_pw="$(tr -d '\n' <"$gen_file")"
+if grep -qF -- "$gen_pw" "$work/gwgen.log"; then
+  fail "generated admin password appears in the log"
+else
+  pass "generated admin password is not logged"
+fi
+gen_login="$(body -H 'Content-Type: application/json' -X POST \
+  --data "{\"username\":\"admin\",\"password\":\"$gen_pw\"}" \
+  "http://127.0.0.1:$gen_port/api/login")"
+printf '%s' "$gen_login" | grep -q '"token"' \
+  && pass "generated admin password logs in" || fail "generated password rejected: $gen_login"
+
 # === 2e. versioned aggregation API (/api/v1/*) =============================
 printf '\n== versioned aggregation API ==\n'
 kb_port="$(free_port)"; v1_port="$(free_port)"

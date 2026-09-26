@@ -34,6 +34,10 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   console consumes instead of reverse-engineering each backend — every response
   carries a `schema`, `source`, and `observed_at` (see
   `docs/HUMAN-INTERFACE-PLAN.md` and `docs/UI-INSPIRATION-RAGBAZ-KANBAN.md`).
+  Those payloads are built by module-level `v1_*` functions, which the
+  optional **Dash pusher** (`DashPusher`, a daemon thread started when
+  `REBEKAH_DASH_URL` + `REBEKAH_DASH_PUSH_KEY` are set) also sends to RAGBAZ
+  Dash (`POST /api/connector/push`, poll `GET /api/connector/pending`).
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin).
   Goal-based nav (Work / Review / Runs / Models / System / Advanced): Work is the
   WeftMark board (five lanes on desktop, a single attention-first list with a
@@ -43,10 +47,15 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   follow); System is four-state service health (`/api/v1/system`); Advanced is
   the authenticated API console.
 - `nix/packages/{weftmark,sylvae}.nix` — Python package builds from pinned src.
+- `deploy/podman/` — rootless Podman deployment: `rebekah-run` (the
+  least-privilege run, Podman secrets as container-only env, pinned digest),
+  a systemd user unit, and setup notes (workspace ACLs for UIDs 10002/10004).
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
 - `tests/gateway.sh` + `tests/gateway-oidc.py` — gateway auth/proxy unit test
   (token + fail-closed guards on stdlib; OIDC when PyJWT is present).
+- `tests/dash-push.py` — the Dash push client against mock WeftMark and Dash
+  (stdlib `unittest`, fake clock, one real gateway process).
 
 ## Build & validate
 
@@ -134,7 +143,8 @@ them in any change:
    - Three auth schemes, any sufficient: a **SQLite username/password** login
      (the default browser sign-in — `scrypt` hashes + opaque bearer sessions in
      the `0700` state dir; seeds a default `admin`, password provided via
-     `REBEKAH_ADMIN_PASSWORD` or generated + logged once); a static bearer
+     `REBEKAH_ADMIN_PASSWORD` or generated into `initial-admin-password`, `0600`
+     beside the DB, and never logged); a static bearer
      **token** (internal / LAN / CI; constant-time compared); and **OIDC** JWT
      bearer verified against the issuer's JWKS (external / SSO / HITL). sqlite3 +
      scrypt are stdlib and PyJWT is imported lazily, so the token/password paths
@@ -153,6 +163,14 @@ them in any change:
      `/run/rebekah/gateway-token`) and passed to the gateway via env, never
      argv. Guarded by `tests/gateway.sh` and `tests/smoke.sh`. No extra
      capability is required; do not add one.
+   - **Pushing to Dash is outbound only** and opens no listener. It calls one
+     configured origin (`https://`, or plain http to loopback only), verifies
+     TLS, never follows redirects, caps what it reads, and backs off on
+     failure. `REBEKAH_DASH_PUSH_KEY` comes from the environment, travels only
+     in the `Authorization` header, and is never logged. It sends exactly the
+     `v1_*` payloads the gateway serves, nothing from the backends beyond
+     them. A half or invalid push configuration refuses to start. Guarded by
+     `tests/dash-push.py`.
    - The built-in web console (`nix/ui/`) is served static and same-origin
      (`GET`/`HEAD` only, path-traversal-safe, strict CSP with `connect-src
      'self'`). The page shell is public; every data call it makes is
@@ -165,8 +183,15 @@ them in any change:
    `DAC_OVERRIDE` (a root `docker exec` of `rebekah-govern` writes the
    weftmark-owned ledger). The README run example and `tests/smoke.sh` run with
    `--cap-drop=ALL` plus exactly those five and `--security-opt=no-new-privileges`;
-   keep `serve()`'s `chmod` before its `chown` so no `CAP_FOWNER` is needed, and
-   don't add capabilities without updating both.
+   keep `serve()` taking the state dirs back to root and `chmod`ing them before
+   its `chown -R`, so no `CAP_FOWNER` is needed on a first start *or* a restart
+   with persistent state, and don't add capabilities without updating both.
+   Guarded by the restart in `tests/smoke.sh`.
+9. **Prompt, clean stop.** TERM/INT make the supervisor stop its services
+   (TERM, then KILL after `REBEKAH_STOP_TIMEOUT`, default 20 s) and exit 0,
+   at any point in `serve()`, including the startup health loop. A service
+   exiting on its own is still a failure (exit 1). Guarded by the stop check in
+   `tests/smoke.sh`.
 
 ## Conventions
 

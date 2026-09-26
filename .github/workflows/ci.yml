@@ -31,6 +31,8 @@ jobs:
         run: |
           python3 -m pip install --quiet --break-system-packages pyjwt cryptography
           bash tests/gateway.sh
+      - name: Test the Dash push client
+        run: python3 tests/dash-push.py
       - name: Build image
         run: nix build .#image --print-build-logs
       - name: Load image
