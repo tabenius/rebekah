@@ -99,26 +99,31 @@ Two options; recommend **(b)**.
 Either way this is additive and read-only; it must obey the same authority rule
 (derive from `StatusService`; never refresh Git or mutate the ledger).
 
-### 3. (Optional, larger) Link a session during active work, before evidence
+### 3. Link a session during active work, before evidence — **shipped**
 
-The evidence-based OpenCode link is now shipped (see the OpenCode bridge under
-§4). What remains deferred is linkage *before* any evidence exists: to show the
-OpenCode session while work is still *in progress*, add an optional `session_ref`
-to the claim / native work-binding record (the same records behind
-`task_change_set_links`, which already carry `claim_id`), populated when an agent
-claims a change set, and surface it through status → detail. This is a
-write-path + domain addition in WeftMark — still a later slice; the
-evidence-producer path covers the common "what ran against this change set"
-question first.
+Linkage *before* any evidence exists is now closed end to end. It needed no new
+WeftMark write-path or domain field after all: a semantic claim already carries
+`agent_id` and `session_id`, so WeftMark surfaces the active claims' identity on
+the Change Set detail as `claims.active` (`[{id, agent, session}]`, additive and
+detail-only — [tabenius/WeftMark#42](https://github.com/tabenius/WeftMark/pull/42)),
+and Rebekah's gateway resolves the same `sylvae:`/`opencode:` prefixes from those
+sessions as it does from evidence producers (see §4). A claiming tool opts in by
+stamping a namespaced session at `weftmark task claim --session
+opencode:session/<id>`; the link then shows while the change set is being worked,
+tagged `active: true` to distinguish it from a past run, and the honest "not
+linked yet" remains when no namespaced identity exists.
 
 ### 4. Rebekah-side follow-up (small; this repo) — **implemented**
 
 `nix/gateway.py::_serve_v1_changeset` now fetches WeftMark's Change Set detail
-route (`/v0/kanban/changes/{id}`), reads its `evidence_refs`, and resolves the
-`related.opencode` / `related.sylvae` slots by scanning each ref's `producer.id`
-and `artifacts` for the `sylvae:` / `opencode:` prefixes: a match sets
-`linked: true` with the namespaced ref(s); otherwise the slot stays an honest
-"not linked yet". The console renders resolved refs with a "linked" chip. This
+route (`/v0/kanban/changes/{id}`) and resolves the `related.opencode` /
+`related.sylvae` slots from **two** seams by scanning for the `sylvae:` /
+`opencode:` prefixes: each `evidence_refs` entry's `producer.id` and `artifacts`
+(a past run), and each `claims.active[].session` (a worker holding the change set
+now, tagged `active: true`). A match sets `linked: true` with the namespaced
+ref(s); otherwise the slot stays an honest "not linked yet". The console renders
+resolved refs with a "linked" chip, plus an "active" chip when a live claim
+holds it. This
 is live against a mock in `tests/gateway.sh` today and **degrades gracefully**
 against the current WeftMark pin (whose detail route has no `evidence_refs`
 yet) — it will light up once the pin advances past

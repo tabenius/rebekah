@@ -779,6 +779,13 @@
       row.appendChild(left);
       if (rel.linked) {
         row.appendChild(el("span", "chip ok", "linked"));
+        // An active-claim ref means a live session holds this change set now,
+        // before it has produced evidence; flag it distinctly from a past run.
+        if ((rel.refs || []).some((r) => r && r.active)) {
+          const a = el("span", "chip", "active");
+          a.title = "A live session is working this change set (from an active claim).";
+          row.appendChild(a);
+        }
       } else {
         const c = el("span", "chip muted", "no link"); c.title = rel.reason || ""; row.appendChild(c);
       }
@@ -1107,13 +1114,16 @@
       git: c.git, evidence: c.evidence, review: c.review, handoff: c.handoff,
       scope_collisions: c.scope_collisions || [], attention: c.attention || [], links,
       related: {
-        // One change set demonstrates a resolved Sylvae run link (from an
-        // evidence producer namespaced "sylvae:run/<id>"); the rest are not
-        // linked yet.
-        opencode: { linked: false, reason: "No opencode reference on this change set's evidence yet." },
+        // Two kinds of resolved link are demonstrated: a Sylvae run from a past
+        // evidence producer ("sylvae:run/<id>"), and an OpenCode session held
+        // right now via an active claim ("opencode:session/<id>", active:true).
+        // The rest are not linked yet.
+        opencode: id === "cs-ingest-guardrails"
+          ? { linked: true, refs: [{ id: "opencode:session/s7", claim: "claim-guard-1", active: true }] }
+          : { linked: false, reason: "No opencode reference on this change set's evidence or active claims yet." },
         sylvae: id === "cs-ingest-guardrails"
           ? { linked: true, refs: [{ id: "sylvae:run/9f2c1a", evidence: "ev-guard-1" }] }
-          : { linked: false, reason: "No sylvae reference on this change set's evidence yet." },
+          : { linked: false, reason: "No sylvae reference on this change set's evidence or active claims yet." },
       } } };
   }
 })();
