@@ -3,11 +3,11 @@
     "ephor-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790096671,
-        "narHash": "sha256-U1SQ8lJSqhvcMZkRFFbLS5xTxDqFnBBoVg/VJtR8RH8=",
+        "lastModified": 1790425957,
+        "narHash": "sha256-yz0RebX2gp76b0041m9Ki+ibszDlMkQGg9pQAOdkDE4=",
         "owner": "tabenius",
         "repo": "BAZ.AI-governance",
-        "rev": "5b05af53d695f183e8a7954032a85cc8beeb113b",
+        "rev": "713c833ce636640b147837fdd66f14c073e7772f",
         "type": "github"
       },
       "original": {
@@ -59,11 +59,11 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790410946,
-        "narHash": "sha256-UhdkfoSPKCSzQ8RVRM+G/iaADNhFCCeo33s06RoGvs4=",
+        "lastModified": 1790429875,
+        "narHash": "sha256-oVNZqDRndiG1QXN6Vq5b9NQ0D5QDmRebI3WToCxiyJs=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "a9489c2f4dbfd8cf9fe71647895cf62e329782dc",
+        "rev": "864dc9c0d690f07743327a9730ab96ad718a06a4",
         "type": "github"
       },
       "original": {

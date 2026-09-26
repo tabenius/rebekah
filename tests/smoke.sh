@@ -194,7 +194,20 @@ for _ in $(seq 1 90); do
     fi
     "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
       http://127.0.0.1:8080/api/v1/oversight |
-      jq -e '.schema == "rebekah.oversight.v1" and .source == "rebekah-gateway" and .stale == false and .decisions.oversight == true' >/dev/null
+      jq -e '.schema == "rebekah.oversight.v1" and .source == "rebekah-gateway" and .stale == false and .decisions.oversight == true and .decisions.review == true' >/dev/null
+    # An agent must not decide its own hold: Ephor's reviewer routes refuse a
+    # caller without EPHOR_OVERSIGHT_TOKEN, here OpenCode's UID on loopback.
+    for auth in "" "Authorization: Bearer not-the-oversight-token"; do
+      ephor_decide="$("$runtime" exec --user 10002:10002 "$name" \
+        curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${auth:+-H "$auth"} \
+        -H 'Content-Type: application/json' -X POST \
+        --data '{"request_id":"smoke","decision":"approved","reviewer":"agent@example.com","rationale":"self"}' \
+        http://127.0.0.1:9800/oversight/decide)"
+      if [[ "$ephor_decide" != 401 ]]; then
+        printf 'failed: Ephor accepted a decision without the reviewer token (got %s)\n' "$ephor_decide" >&2
+        exit 1
+      fi
+    done
 
     # Restart on the same state: the entrypoint must set up state directories
     # the service UIDs already own, still without CAP_FOWNER.
