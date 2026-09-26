@@ -3,15 +3,14 @@
     "ephor-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1,
-        "narHash": "sha256-/TULOF6l23FKDLFo0EUdRFesf8FeYKrLk3HMYvNloXU=",
         "path": "./nix/ephor-absent",
         "type": "path"
       },
       "original": {
         "path": "./nix/ephor-absent",
         "type": "path"
-      }
+      },
+      "parent": []
     },
     "nixpkgs": {
       "locked": {
@@ -56,11 +55,11 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790410946,
-        "narHash": "sha256-UhdkfoSPKCSzQ8RVRM+G/iaADNhFCCeo33s06RoGvs4=",
+        "lastModified": 1790455859,
+        "narHash": "sha256-+UsQ3FIh0H79twMtLb+tlYg5mj3lZJy8on4ZjgKtsqM=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "a9489c2f4dbfd8cf9fe71647895cf62e329782dc",
+        "rev": "032b800cfab789a9d93cd82ad552570603e1d3fd",
         "type": "github"
       },
       "original": {

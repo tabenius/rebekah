@@ -8,6 +8,10 @@ name: publish-image
 #   - push to main            -> ghcr.io/<owner>/rebekah:latest  (+ :sha-<short>)
 #   - push of a tag v*        -> ghcr.io/<owner>/rebekah:<tag>    (+ release asset)
 #   - manual (workflow_dispatch)
+#
+# The opt-in Ephor image (image-ephor) is built from a private source, so it
+# goes to its own *private* package, ghcr.io/<owner>/rebekah-ephor, in the
+# publish-ephor job: same tags, never public, never a release asset.
 
 on:
   push:
@@ -62,6 +66,10 @@ jobs:
           # result is docker-archive:<gzip tar>; skopeo reads it directly.
           skopeo copy "docker-archive:$(readlink -f result)" "docker://${IMAGE}:${PRIMARY}"
           skopeo copy "docker://${IMAGE}:${PRIMARY}" "docker://${IMAGE}:${SHA_TAG}"
+          # The digest to pin (deploy/podman/README.md, "Updating").
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${SHA_TAG}")"
+          echo "Published ${IMAGE}@${digest}"
+          echo "Published \`${IMAGE}@${digest}\` (${PRIMARY}, ${SHA_TAG})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stage tarball for release
         if: github.ref_type == 'tag'
@@ -73,3 +81,80 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: rebekah-image.tar.gz
+
+  # The opt-in image with the Ephor bridge (off until REBEKAH_EPHOR_ENABLE=1),
+  # built like CI's ephor job from nix/ephor.rev. Its source is private, so
+  # the package must stay private: the job refuses to push to, and fails after
+  # pushing to, a package anyone can pull anonymously. A package GHCR creates
+  # on first push is private; keep it that way in the package settings.
+  # Without EPHOR_READ_TOKEN (a fork, a public mirror) the job skips itself.
+  publish-ephor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HAS_EPHOR_TOKEN: ${{ secrets.EPHOR_READ_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HAS_EPHOR_TOKEN == 'true'
+
+      - uses: cachix/install-nix-action@v31
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        with:
+          github_access_token: ${{ secrets.EPHOR_READ_TOKEN }}
+
+      - name: Build the Ephor image
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        run: nix build .#image-ephor --print-build-logs --override-input ephor-src "github:tabenius/BAZ.AI-governance/$(cat nix/ephor.rev)"
+
+      - name: Compute image ref (lowercased owner)
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        id: ref
+        run: |
+          owner_lc=$(printf '%s' "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "path=${owner_lc}/rebekah-ephor" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner_lc}/rebekah-ephor" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "primary=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "primary=latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "sha=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install skopeo
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - name: Push to the private GHCR package
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          PKG: ${{ steps.ref.outputs.path }}
+          PRIMARY: ${{ steps.ref.outputs.primary }}
+          SHA_TAG: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -eu
+          # Anonymous pull access = a public package. GHCR hands anyone a pull
+          # token for a public repository and refuses one for a private (or
+          # not yet existing) one.
+          public() {
+            curl -s -o /dev/null -w '%{http_code}' \
+              "https://ghcr.io/token?scope=repository:${PKG}:pull&service=ghcr.io" | grep -qx 200
+          }
+          if public; then
+            echo "::error::${IMAGE} is public; refusing to push the Ephor image. Make the package private first."
+            exit 1
+          fi
+          skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          skopeo copy "docker-archive:$(readlink -f result)" "docker://${IMAGE}:${PRIMARY}"
+          skopeo copy "docker://${IMAGE}:${PRIMARY}" "docker://${IMAGE}:${SHA_TAG}"
+          if public; then
+            echo "::error::${IMAGE} is publicly pullable; make the package private now."
+            exit 1
+          fi
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${SHA_TAG}")"
+          echo "Published ${IMAGE}@${digest} (private)"
+          echo "Published \`${IMAGE}@${digest}\` (${PRIMARY}, ${SHA_TAG}; private)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: No Ephor token
+        if: env.HAS_EPHOR_TOKEN != 'true'
+        run: echo "EPHOR_READ_TOKEN is not set; skipping the private Ephor image."
