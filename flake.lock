@@ -42,16 +42,16 @@
     "sylvae-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790195176,
+        "lastModified": 1790410941,
         "narHash": "sha256-Uw5OPmGFBt8GIW6XRfsE5p+zxqx3lwzgZEIHPN7AzqA=",
         "owner": "tabenius",
         "repo": "sylvae",
-        "rev": "bdcc6e92e1ebd45f9b1a4a548f1ded37d54b3905",
+        "rev": "a71820eaed58a683a5255feac7fb727ea16cab9b",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
-        "ref": "claude/pensive-pasteur-6cah6b",
+        "ref": "master",
         "repo": "sylvae",
         "type": "github"
       }
@@ -59,16 +59,15 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790191007,
+        "lastModified": 1790410946,
         "narHash": "sha256-UhdkfoSPKCSzQ8RVRM+G/iaADNhFCCeo33s06RoGvs4=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "36f48a98aec5678680a2ece9e6bd587c7cb50579",
+        "rev": "a9489c2f4dbfd8cf9fe71647895cf62e329782dc",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
-        "ref": "claude/pensive-pasteur-6cah6b",
         "repo": "WeftMark",
         "type": "github"
       }
