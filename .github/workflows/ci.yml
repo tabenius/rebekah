@@ -27,6 +27,8 @@ jobs:
         run: nix flake check --print-build-logs
       - name: Test Ephor connector
         run: bash tests/ephor-connector.sh
+      - name: Test OpenCode evidence bridge
+        run: bash tests/opencode-evidence.sh
       - name: Test gateway auth (token + OIDC)
         run: |
           python3 -m pip install --quiet --break-system-packages pyjwt cryptography

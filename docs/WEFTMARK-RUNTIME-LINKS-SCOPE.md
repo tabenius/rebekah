@@ -101,13 +101,15 @@ Either way this is additive and read-only; it must obey the same authority rule
 
 ### 3. (Optional, larger) Link a session during active work, before evidence
 
-Evidence-based linkage only appears once a run has recorded evidence. To show
-the OpenCode session while work is *in progress*, add an optional
-`session_ref` to the claim / native work-binding record (the same records behind
+The evidence-based OpenCode link is now shipped (see the OpenCode bridge under
+§4). What remains deferred is linkage *before* any evidence exists: to show the
+OpenCode session while work is still *in progress*, add an optional `session_ref`
+to the claim / native work-binding record (the same records behind
 `task_change_set_links`, which already carry `claim_id`), populated when an agent
 claims a change set, and surface it through status → detail. This is a
-write-path + domain addition — defer to a second slice; the evidence-producer
-path above covers the common "what ran against this change set" question first.
+write-path + domain addition in WeftMark — still a later slice; the
+evidence-producer path covers the common "what ran against this change set"
+question first.
 
 ### 4. Rebekah-side follow-up (small; this repo) — **implemented**
 
@@ -136,6 +138,39 @@ run id, records `weftmark --producer-id sylvae:run/<id> evidence run <cs>
 `cc.ragbaz.rebekah.sylvae-evidence.v0` summary. WeftMark runs the command and
 binds its pass/fail; the gateway then resolves the `related.sylvae` link from
 the stored producer id.
+
+The symmetric OpenCode coordinator is `nix/opencode-evidence.sh`
+(`rebekah-opencode-evidence`). It differs in one principled way: OpenCode mints
+its own session id when a session starts, so the coordinator *receives* it in
+`REBEKAH_OPENCODE_SESSION_ID` (validated to `[A-Za-z0-9._-]`, failing closed on a
+malformed value — the same discipline the Ephor connector applies to its
+`entry_id`) rather than preallocating one. Given a change set, that session id,
+and a verification command (argv or `REBEKAH_OPENCODE_COMMAND`), it records
+`weftmark --producer-id opencode:session/<id> evidence run <cs> --command <verify
+…>` and emits a `cc.ragbaz.rebekah.opencode-evidence.v0` summary. WeftMark runs
+the command and binds its pass/fail; the gateway resolves the `related.opencode`
+link from the stored producer id. It never reaches into OpenCode's HTTP surface
+or imports mutable session state — the session id is the only join key.
+`tests/opencode-evidence.sh` guards the fail-closed cases and the attribution
+against a stubbed `weftmark`.
+
+## Status: landed
+
+Both halves of the runtime-links thread are merged and live:
+
+- **Write side (attribution):** WeftMark's global `--producer-id` /
+  `--producer-kind` ([tabenius/WeftMark#39](https://github.com/tabenius/WeftMark/pull/39), merged).
+- **Read side (surface):** `evidence_refs` on the Change Set detail route
+  (same PR).
+- **Producer identity:** Sylvae's `sylvae:run/<id>` runtime ref
+  ([tabenius/sylvae#1](https://github.com/tabenius/sylvae/pull/1), merged).
+- **Consumer:** the gateway's `related.opencode` / `related.sylvae` resolution
+  and the Sylvae bridge ([tabenius/rebekah#22](https://github.com/tabenius/rebekah/pull/22), merged).
+- **OpenCode bridge:** `rebekah-opencode-evidence`, this slice — closes the
+  `related.opencode` slot symmetrically.
+
+The only remaining, explicitly-deferred piece is §3 (linking a session *before*
+evidence exists, via a claim-time `session_ref` in WeftMark's domain).
 
 ## Prior art to reconcile
 
