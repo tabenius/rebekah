@@ -171,6 +171,31 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
+    # Secrets reach only the services that need them. OpenCode runs agents, so
+    # its environment must hold no gateway, admin or oversight credential, even
+    # though this run passes REBEKAH_ADMIN_PASSWORD with -e.
+    oc_env="$("$runtime" exec --user 10002:10002 "$name" sh -c '
+      for p in /proc/[0-9]*; do
+        [ "${p#/proc/}" = "$$" ] && continue  # not this reader, whose script names it
+        case "$(tr "\0" " " < "$p/cmdline" 2>/dev/null)" in
+          *"opencode serve"*) tr "\0" "\n" < "$p/environ" ;;
+        esac
+      done')"
+    if [[ -z "$oc_env" ]] || grep -qE '^(REBEKAH_ADMIN_PASSWORD|REBEKAH_GATEWAY_TOKEN|REBEKAH_DASH_PUSH_KEY|EPHOR_OVERSIGHT_TOKEN|REBEKAH_WEFTMARK_WRITE_TOKEN)=' <<<"$oc_env"; then
+      printf 'failed: OpenCode can read a credential meant for another service\n' >&2
+      exit 1
+    fi
+    # Human-in-the-loop: pending Ephor holds, for Dash, behind the gateway's auth.
+    gw_oversight="$("$runtime" exec "$name" \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8080/api/v1/oversight)"
+    if [[ "$gw_oversight" != 401 ]]; then
+      printf 'failed: /api/v1/oversight was not authenticated (got %s)\n' "$gw_oversight" >&2
+      exit 1
+    fi
+    "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
+      http://127.0.0.1:8080/api/v1/oversight |
+      jq -e '.schema == "rebekah.oversight.v1" and .stale == false and .decisions.oversight == true' >/dev/null
+
     # Restart on the same state: the entrypoint must set up state directories
     # the service UIDs already own, still without CAP_FOWNER.
     "$runtime" restart -t 30 "$name" >/dev/null
@@ -203,7 +228,7 @@ for _ in $(seq 1 90); do
       exit 1
     fi
 
-    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, SQLite login, web console, restart, and clean stop are healthy\n'
+    printf 'ok: core services including Ephor, governed WeftMark evidence, service isolation, authenticated gateway, SQLite login, web console, oversight view, scoped secrets, restart, and clean stop are healthy\n'
     exit 0
   fi
   if [[ "$("$runtime" inspect -f '{{.State.Running}}' "$name")" != true ]]; then

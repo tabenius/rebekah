@@ -37,7 +37,10 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   Those payloads are built by module-level `v1_*` functions, which the
   optional **Dash pusher** (`DashPusher`, a daemon thread started when
   `REBEKAH_DASH_URL` + `REBEKAH_DASH_PUSH_KEY` are set) also sends to RAGBAZ
-  Dash (`POST /api/connector/push`, poll `GET /api/connector/pending`).
+  Dash (`POST /api/connector/push`, poll `GET /api/connector/pending`); it
+  also applies human-in-the-loop decisions Dash queues (`apply_command`:
+  Ephor holds, WeftMark reviews) and reports them (`POST /api/connector/results`).
+  `GET /api/v1/oversight` / `v1_oversight` lists pending Ephor holds.
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin).
   Goal-based nav (Work / Review / Runs / Models / System / Advanced): Work is the
   WeftMark board (five lanes on desktop, a single attention-first list with a
@@ -192,6 +195,23 @@ them in any change:
    at any point in `serve()`, including the startup health loop. A service
    exiting on its own is still a failure (exit 1). Guarded by the stop check in
    `tests/smoke.sh`.
+
+10. **Secrets reach only the services that need them.** `serve()` un-exports
+    every name in `private_env` and passes each, per command, only to the
+    processes listed beside it (OpenCode's password to OpenCode and the gateway;
+    the gateway token, admin password and Dash push key to the gateway; the
+    Ephor oversight token to Ephor and the gateway; the WeftMark write token to
+    the gateway, and to WeftMark as a 0400 file it owns). An exported secret
+    would reach every service, OpenCode's agents included. Never `export` a
+    secret; add new ones to `private_env`. Guarded by `tests/smoke.sh` (OpenCode's
+    environment holds none of the others' credentials).
+11. **Human-in-the-loop decisions come only from Dash, through the gateway.**
+    Ephor's reviewer routes need `EPHOR_OVERSIGHT_TOKEN` and WeftMark's review
+    route its write token; only the gateway holds both, and it applies a
+    decision only from an authenticated Dash response, validated against
+    `COMMAND_KINDS` and strict id/actor patterns. It never approves a hold that
+    is not pending or is past its deadline, applies each command once, and
+    never logs a credential. Guarded by `tests/dash-push.py`.
 
 ## Conventions
 

@@ -130,6 +130,16 @@ class Config:
             "ephor": (ep_host, ep_port, None),
         }
         self.backends = {name: catalogue[name] for name in exposed if name in catalogue}
+        # Every loopback backend, exposed or not, for the gateway's own calls
+        # (the oversight view and applying decisions from Dash). Exposure only
+        # decides what a client may reach through the proxy.
+        self.internal = catalogue
+
+        # Human-in-the-loop decisions from Dash, applied locally. Each is off
+        # unless its credential is set; the supervisor mints both per boot and
+        # gives them to the gateway (and the one backend that checks each) only.
+        self.ephor_oversight_token = env.get("EPHOR_OVERSIGHT_TOKEN", "").strip()
+        self.weftmark_write_token = env.get("REBEKAH_WEFTMARK_WRITE_TOKEN", "").strip()
         self.unknown_exposed = [name for name in exposed if name not in catalogue]
 
         # Built-in web console (served static, same-origin). On by default; the
@@ -462,6 +472,48 @@ def backend_get_json(cfg, name, path):
                 pass
 
 
+def internal_json(cfg, name, method, path, body=None, bearer=None, headers=None):
+    """A JSON call to a loopback backend from the internal catalogue.
+
+    Returns (status, parsed JSON or None); (None, None) when unreachable. Never
+    raises and never follows redirects; bearer tokens travel only in the
+    Authorization header.
+    """
+    backend = cfg.internal.get(name)
+    if backend is None:
+        return None, None
+    host, port, _ = backend
+    send = {"Host": "%s:%d" % (host, port), "Accept": "application/json"}
+    send.update(headers or {})
+    if bearer:
+        send["Authorization"] = "Bearer " + bearer
+    payload = None
+    if body is not None:
+        payload = json.dumps(body, separators=(",", ":")).encode()
+        send["Content-Type"] = "application/json"
+    conn = None
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=min(cfg.timeout, 10))
+        conn.request(method, path, body=payload, headers=send)
+        resp = conn.getresponse()
+        raw = resp.read(1024 * 1024 + 1)
+        data = None
+        if len(raw) <= 1024 * 1024:
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = None
+        return resp.status, data
+    except Exception:  # noqa: BLE001 -- degrade, never leak
+        return None, None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def fetch_kanban(cfg):
     """WeftMark's kanban projection, or None when it is not exposed/reachable."""
     if "weftmark" not in cfg.backends:
@@ -551,6 +603,188 @@ def v1_changesets(kanban):
         "stale": stale,
         "items": items,
     }
+
+
+def _text(value, limit):
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+    return text[:limit]
+
+
+def _iso_ms(ms):
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(ms) / 1000))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def v1_oversight(cfg):
+    """Actions Ephor holds for a human decision (pending only).
+
+    What a reviewer needs to decide: what is held, why (risk), until when, and
+    the action's arguments, each bounded. Read from the local Ephor whether or
+    not it is exposed through the gateway.
+    """
+    status, data = internal_json(
+        cfg, "ephor", "POST", "/oversight/list", {"status": "pending", "limit": 100})
+    stale = status != 200 or not isinstance(data, dict)
+    items = []
+    if not stale:
+        for held in (data.get("items") or [])[:100]:
+            if not isinstance(held, dict):
+                continue
+            arguments = held.get("arguments")
+            if not isinstance(arguments, list):
+                arguments = [] if arguments is None else [arguments]
+            items.append({
+                "request_id": _text(held.get("request_id"), 80),
+                "status": _text(held.get("status"), 40),
+                "agent_class": _text(held.get("agent_class"), 80),
+                "action": _text(held.get("action"), 200),
+                "arguments": [_text(arg, 200) for arg in arguments[:10]],
+                "risk_level": _text(held.get("risk_level"), 40),
+                "risk_flags": [_text(flag, 80) for flag in (held.get("risk_flags") or [])[:10]],
+                "deadline": _iso_ms(held.get("deadline_ms")),
+                "entry_id": _text(held.get("entry_id"), 80),
+            })
+    return {
+        "schema": "rebekah.oversight.v1",
+        "observed_at": _iso_now(),
+        "source": "ephor",
+        "count": len(items),
+        "stale": stale,
+        # Whether decisions from Dash can be applied here at all.
+        "decisions": {
+            "oversight": bool(cfg.ephor_oversight_token),
+            "review": bool(cfg.weftmark_write_token),
+        },
+        "items": items,
+    }
+
+
+# --- decisions from Dash (human in the loop) --------------------------------
+# Dash hands queued decisions to this instance on its poll/push responses; the
+# gateway applies each to the local Ephor or WeftMark and reports the result.
+# The instance stays the authority: Ephor and WeftMark enforce their own rules,
+# and the gateway refuses what they would not see, e.g. approving a hold that
+# is no longer pending or is past its deadline.
+
+COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+CHANGE_SET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+QUEUE_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
+ACTOR_RE = re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}$")
+COMMAND_KINDS = ("oversight.decide", "oversight.defer", "oversight.escalate", "review.record")
+
+
+def _reason(value, limit=2000):
+    return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
+
+
+def apply_command(cfg, command, now_ms=None):
+    """Apply one decision from Dash; returns {id, ok, outcome?, error?}."""
+    cid = command.get("id") if isinstance(command, dict) else None
+    if not isinstance(cid, str) or not COMMAND_ID_RE.match(cid):
+        return None  # not addressable: nothing to report back to
+    result = {"id": cid, "ok": False}
+    kind = command.get("kind")
+    params = command.get("params") if isinstance(command.get("params"), dict) else {}
+    actor = command.get("requested_by")
+    if kind not in COMMAND_KINDS:
+        result["error"] = "unknown_kind"
+        return result
+    if not isinstance(actor, str) or not ACTOR_RE.match(actor):
+        result["error"] = "bad_actor"
+        return result
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+
+    if kind == "review.record":
+        cs = params.get("change_set_id")
+        if not isinstance(cs, str) or not CHANGE_SET_RE.match(cs) or ".." in cs:
+            result["error"] = "bad_change_set"
+            return result
+        if not cfg.weftmark_write_token:
+            result["error"] = "review_not_enabled"
+            return result
+        body = {"review_id": "dash-" + cid, "author_id": actor}
+        changes = _reason(params.get("request_changes"))
+        if changes:
+            body["request_changes"] = changes
+        status, data = internal_json(
+            cfg, "weftmark", "POST",
+            "/v0/control/changes/%s/reviews" % urllib.parse.quote(cs, safe=""),
+            body, bearer=cfg.weftmark_write_token,
+            headers={"Idempotency-Key": "dash-" + cid})
+        if status == 200 and isinstance(data, dict):
+            decision = ((data.get("control") or {}).get("result") or {}).get("decision") or {}
+            result.update(ok=True, outcome=_text(decision.get("outcome"), 40))
+        else:
+            result["error"] = _text((data or {}).get("error"), 80) or (
+                "weftmark_unreachable" if status is None else "weftmark_http_%d" % status)
+        return result
+
+    request_id = params.get("request_id")
+    if not isinstance(request_id, str) or not REQUEST_ID_RE.match(request_id):
+        result["error"] = "bad_request_id"
+        return result
+    if not cfg.ephor_oversight_token:
+        result["error"] = "oversight_not_enabled"
+        return result
+    rationale = _reason(params.get("rationale"))
+    if not rationale:
+        result["error"] = "rationale_required"
+        return result
+    status, data = internal_json(
+        cfg, "ephor", "GET", "/oversight/fetch/%s" % urllib.parse.quote(request_id, safe=""))
+    held = (data or {}).get("action") if status == 200 and isinstance(data, dict) else None
+    if not isinstance(held, dict):
+        result["error"] = "hold_not_found" if status == 404 else "ephor_unreachable"
+        return result
+    if held.get("status") != "pending":
+        result.update(error="not_pending", outcome=_text(held.get("status"), 40))
+        return result
+
+    if kind == "oversight.decide":
+        decision = params.get("decision")
+        if decision not in ("approved", "denied"):
+            result["error"] = "bad_decision"
+            return result
+        deadline = held.get("deadline_ms")
+        if decision == "approved" and isinstance(deadline, int) and now_ms > deadline:
+            # Past its deadline a hold defaults to deny; never approve it late.
+            result["error"] = "deadline_passed"
+            return result
+        path = "/oversight/decide"
+        body = {"request_id": request_id, "decision": decision,
+                "reviewer": actor, "rationale": rationale}
+    elif kind == "oversight.defer":
+        minutes = params.get("defer_minutes")
+        if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= 1440:
+            result["error"] = "bad_defer_minutes"
+            return result
+        path = "/oversight/defer"
+        body = {"request_id": request_id, "defer_ms": minutes * 60000,
+                "rationale": "%s (deferred by %s)" % (rationale, actor)}
+    else:
+        queue = params.get("target_queue")
+        if not isinstance(queue, str) or not QUEUE_RE.match(queue):
+            result["error"] = "bad_target_queue"
+            return result
+        path = "/oversight/escalate"
+        body = {"request_id": request_id, "target_queue": queue,
+                "rationale": "%s (escalated by %s)" % (rationale, actor)}
+
+    status, data = internal_json(cfg, "ephor", "POST", path, body,
+                                 bearer=cfg.ephor_oversight_token)
+    if status == 200 and isinstance(data, dict):
+        result.update(ok=True, outcome=_text((data.get("action") or {}).get("status"), 40))
+    elif status in (401, 403):
+        result["error"] = "ephor_refused_credential"
+    else:
+        result["error"] = _text((data or {}).get("error"), 120) or (
+            "ephor_unreachable" if status is None else "ephor_http_%d" % status)
+    return result
 
 
 def make_handler(cfg, auth):
@@ -674,6 +908,11 @@ def make_handler(cfg, auth):
             if self._authed() is None:
                 return
             self._json(200, v1_system(cfg, auth))
+
+        def _serve_v1_oversight(self):
+            if self._authed() is None:
+                return
+            self._json(200, v1_oversight(cfg))
 
         def _serve_v1_attention(self):
             if self._authed() is None:
@@ -894,6 +1133,9 @@ def make_handler(cfg, auth):
             if raw_path in ("/api/v1/system", "/api/v1/system/"):
                 self._serve_v1_system()
                 return
+            if raw_path in ("/api/v1/oversight", "/api/v1/oversight/"):
+                self._serve_v1_oversight()
+                return
             if raw_path in ("/api/v1/attention", "/api/v1/attention/"):
                 self._serve_v1_attention()
                 return
@@ -998,6 +1240,8 @@ DASH_PUSH_KEY_RE = re.compile(r"^rbkp_[0-9a-f]{12}_[A-Za-z0-9_-]{43}$")
 DASH_ENVELOPE = "rebekah.dash-push.v1"
 DASH_MAX_RESPONSE = 64 * 1024
 DASH_TIMEOUT = 10
+MAX_COMMANDS = 20  # decisions taken from one Dash response
+MAX_REMEMBERED = 500
 DASH_MAX_BACKOFF = 900
 
 
@@ -1041,6 +1285,11 @@ class DashPusher:
         self.refresh = False
         self.failures = 0
         self._state = None  # last logged state, so the log shows transitions only
+        # Decisions from Dash: results not yet acknowledged, and every result
+        # of the last MAX_REMEMBERED commands, so a command Dash sends again
+        # (its acknowledgement was lost) is reported, never applied twice.
+        self.unreported = {}
+        self.applied = {}
 
     def views(self):
         kanban = fetch_kanban(self.cfg)
@@ -1048,7 +1297,45 @@ class DashPusher:
             "system": v1_system(self.cfg, self.auth),
             "attention": v1_attention(kanban),
             "change-sets": v1_changesets(kanban),
+            "oversight": v1_oversight(self.cfg),
         }
+
+    def take_commands(self, data):
+        """Apply the decisions in a Dash response once each; True if any ran."""
+        commands = (data or {}).get("commands")
+        if not isinstance(commands, list):
+            return False
+        ran = False
+        for command in commands[:MAX_COMMANDS]:
+            cid = command.get("id") if isinstance(command, dict) else None
+            if cid in self.applied:
+                self.unreported.setdefault(cid, self.applied[cid])
+                continue
+            result = apply_command(self.cfg, command)
+            if result is None:
+                continue
+            ran = True
+            self.applied[cid] = result
+            self.unreported[cid] = result
+            self.log("applied %s from Dash: %s" % (
+                command.get("kind"), "ok" if result.get("ok") else result.get("error")))
+        while len(self.applied) > MAX_REMEMBERED:
+            self.applied.pop(next(iter(self.applied)))
+        return ran
+
+    def report(self):
+        """Send unacknowledged results to Dash; failures are retried next round."""
+        if not self.unreported:
+            return
+        try:
+            status, data, _ = self._call(
+                "POST", "/api/connector/results", {"results": list(self.unreported.values())})
+        except (OSError, http.client.HTTPException):
+            return
+        if status == 200:
+            acked = (data or {}).get("acknowledged")
+            for cid in (acked if isinstance(acked, list) else list(self.unreported)):
+                self.unreported.pop(cid, None)
 
     @staticmethod
     def digest(views):
@@ -1134,13 +1421,16 @@ class DashPusher:
             return self._failed("Dash answered %s" % error)
 
         self.failures = 0
+        # A decision changes what the views show: push them again at once.
+        decided = self.take_commands(data)
+        self.report()
         if due:
             self.last_digest = digest
             self.last_push = now
-            self.refresh = bool((data or {}).get("refresh_requested"))
+            self.refresh = bool((data or {}).get("refresh_requested")) or decided
             self._note("ok", "pushing to %s" % self.cfg.dash_url)
-            return self.cfg.dash_poll
-        self.refresh = bool((data or {}).get("refresh_requested"))
+            return 0 if decided else self.cfg.dash_poll
+        self.refresh = bool((data or {}).get("refresh_requested")) or decided
         self._note("ok", "pushing to %s" % self.cfg.dash_url)
         # Someone asked for fresh data: push now, not at the next poll.
         return 0 if self.refresh else self.cfg.dash_poll
