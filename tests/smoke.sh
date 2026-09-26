@@ -221,8 +221,8 @@ for _ in $(seq 1 90); do
     "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
       http://127.0.0.1:8080/api/v1/oversight |
       jq -e --argjson on "$([[ "$smoke_ephor" == 1 ]] && echo true || echo false)" \
-        '.schema == "rebekah.oversight.v1" and .stale == false and
-         .enabled == $on and .decisions.oversight == $on' >/dev/null
+        '.schema == "rebekah.oversight.v1" and .source == "rebekah-gateway" and
+         .stale == false and .enabled == $on and .decisions.oversight == $on' >/dev/null
     "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
       http://127.0.0.1:8080/api/v1/system |
       jq -e --arg state "$([[ "$smoke_ephor" == 1 ]] && echo enabled || echo absent)" \

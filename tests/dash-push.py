@@ -339,6 +339,10 @@ class DecisionsTest(unittest.TestCase):
         Ephor.holds = {"h1": hold("h1")}
         self.pusher.step()
         view = Dash.requests[-1]["body"]["views"]["oversight"]
+        # Same envelope as the other /api/v1 views: Dash rejects a pulled view
+        # whose source is not rebekah-gateway.
+        self.assertEqual((view["schema"], view["source"], view["origin"]),
+                         ("rebekah.oversight.v1", "rebekah-gateway", "ephor"))
         self.assertFalse(view["stale"])
         self.assertEqual((view["source"], view["enabled"]), ("rebekah-gateway", True))
         self.assertEqual(view["decisions"], {"oversight": True, "review": True})

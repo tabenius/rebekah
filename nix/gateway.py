@@ -670,9 +670,11 @@ def v1_oversight(cfg):
     return {
         "schema": "rebekah.oversight.v1",
         "observed_at": _iso_now(),
-        # The gateway builds this envelope (whether or not Ephor is there);
-        # Dash's pull path accepts only views from rebekah-gateway.
+        # The gateway builds this envelope, like every /api/v1 view (Dash
+        # checks it); the holds themselves come from the local Ephor, when
+        # there is one (it is opt-in).
         "source": "rebekah-gateway",
+        "origin": "ephor",
         "enabled": enabled,
         "ephor": cfg.ephor_state,
         "count": len(items),
