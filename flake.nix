@@ -39,8 +39,13 @@
             if builtins.pathExists "${ephor-src}/Cargo.lock" then
               pkgs.callPackage ./nix/packages/ephor.nix { src = ephor-src; }
             else
-              throw ("Ephor is opt-in: build with --override-input ephor-src "
-                + "github:tabenius/BAZ.AI-governance/<rev from nix/ephor.rev>");
+              # Fails when built, not when evaluated, so `nix flake check`
+              # (which evaluates every package) passes on the baseline.
+              pkgs.runCommand "ephor-opt-in-required" { } ''
+                echo "Ephor is opt-in: build with --override-input ephor-src" \
+                  "github:tabenius/BAZ.AI-governance/<rev from nix/ephor.rev>" >&2
+                exit 1
+              '';
         in {
           inherit weftmark sylvae ephor;
           default = self.packages.${system}.image;
