@@ -109,15 +109,33 @@ claims a change set, and surface it through status → detail. This is a
 write-path + domain addition — defer to a second slice; the evidence-producer
 path above covers the common "what ran against this change set" question first.
 
-### 4. Rebekah-side follow-up (small; this repo)
+### 4. Rebekah-side follow-up (small; this repo) — **implemented**
 
-`nix/gateway.py::_serve_v1_changeset` already emits the `related.opencode` /
-`related.sylvae` slots. Once WeftMark exposes producers/artifacts (via 2b,
-preferably), parse the namespaced ids (`sylvae:`, `opencode:` prefixes on
-`producer_id` / artifact `uri`) and set `linked: true` with the extracted id and
-a deep link; leave the honest "not linked yet" when no evidence carries them.
-The console (`nix/ui/index.html`) already renders whatever the slots contain, so
-no UI change is required. Add a gateway test with an evidence-bearing mock.
+`nix/gateway.py::_serve_v1_changeset` now fetches WeftMark's Change Set detail
+route (`/v0/kanban/changes/{id}`), reads its `evidence_refs`, and resolves the
+`related.opencode` / `related.sylvae` slots by scanning each ref's `producer.id`
+and `artifacts` for the `sylvae:` / `opencode:` prefixes: a match sets
+`linked: true` with the namespaced ref(s); otherwise the slot stays an honest
+"not linked yet". The console renders resolved refs with a "linked" chip. This
+is live against a mock in `tests/gateway.sh` today and **degrades gracefully**
+against the current WeftMark pin (whose detail route has no `evidence_refs`
+yet) — it will light up once the pin advances past
+[tabenius/WeftMark#39](https://github.com/tabenius/WeftMark/pull/39) and a
+producer stamps a namespaced id (see
+[tabenius/sylvae#1](https://github.com/tabenius/sylvae/pull/1)). Sylvae now
+supports a coordinator-preallocated `--run-id`; the coordinator gives the same
+identity to WeftMark as `--producer-id sylvae:run/<id>` and runs the real
+`sylvae run ... --run-id <id>` command through `weftmark evidence run`. This
+closes the bridge without importing mutable results, guessing joins, or making
+Rebekah a second evidence authority.
+
+That coordinator is `nix/sylvae-evidence.sh` (`rebekah-sylvae-evidence`):
+given `REBEKAH_CHANGE_SET_ID`, a skill path and input, it preallocates the
+run id, records `weftmark --producer-id sylvae:run/<id> evidence run <cs>
+--command sylvae run <skill> --run-id <id> ...`, and emits a
+`cc.ragbaz.rebekah.sylvae-evidence.v0` summary. WeftMark runs the command and
+binds its pass/fail; the gateway then resolves the `related.sylvae` link from
+the stored producer id.
 
 ## Prior art to reconcile
 

@@ -767,12 +767,21 @@
     ["opencode", "sylvae"].forEach((sys) => {
       const rel = related[sys];
       if (!rel) return;
-      const row = el("div", "item muted");
+      const row = el("div", "item" + (rel.linked ? "" : " muted"));
       const left = el("div");
       left.appendChild(el("div", "t", sys[0].toUpperCase() + sys.slice(1)));
-      left.appendChild(el("div", "id", rel.linked ? (rel.id || "") : "not linked yet"));
+      if (rel.linked) {
+        const ids = (rel.refs || []).map((r) => r.id).filter(Boolean);
+        left.appendChild(el("div", "id", ids.join(", ") || (rel.id || "")));
+      } else {
+        left.appendChild(el("div", "id", "not linked yet"));
+      }
       row.appendChild(left);
-      if (!rel.linked) { const c = el("span", "chip muted", "no link"); c.title = rel.reason || ""; row.appendChild(c); }
+      if (rel.linked) {
+        row.appendChild(el("span", "chip ok", "linked"));
+      } else {
+        const c = el("span", "chip muted", "no link"); c.title = rel.reason || ""; row.appendChild(c);
+      }
       list.appendChild(row);
     });
     if (!list.children.length) list.appendChild(el("div", "empty", "No correlated identifiers."));
@@ -1098,8 +1107,13 @@
       git: c.git, evidence: c.evidence, review: c.review, handoff: c.handoff,
       scope_collisions: c.scope_collisions || [], attention: c.attention || [], links,
       related: {
-        opencode: { linked: false, reason: "WeftMark does not yet surface an OpenCode session reference for this change set." },
-        sylvae: { linked: false, reason: "WeftMark does not yet surface a Sylvae run reference for this change set." },
+        // One change set demonstrates a resolved Sylvae run link (from an
+        // evidence producer namespaced "sylvae:run/<id>"); the rest are not
+        // linked yet.
+        opencode: { linked: false, reason: "No opencode reference on this change set's evidence yet." },
+        sylvae: id === "cs-ingest-guardrails"
+          ? { linked: true, refs: [{ id: "sylvae:run/9f2c1a", evidence: "ev-guard-1" }] }
+          : { linked: false, reason: "No sylvae reference on this change set's evidence yet." },
       } } };
   }
 })();

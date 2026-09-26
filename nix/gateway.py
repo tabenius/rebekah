@@ -744,19 +744,41 @@ def make_handler(cfg, auth):
             for t in tasks:
                 links.append(t)
 
-            # OpenCode / Sylvae correlation slots. WeftMark does not yet surface
-            # those identifiers, so they are declared absent (with a reason)
-            # rather than joined on a guess -- the interface shows the spine's
-            # shape and fills in once real references land. The WeftMark change
-            # needed to populate these is scoped in
-            # docs/WEFTMARK-RUNTIME-LINKS-SCOPE.md (evidence producer/artifact
-            # ids); wire the parse here when that lands.
-            related = {
-                "opencode": {"linked": False,
-                             "reason": "WeftMark does not yet surface an OpenCode session reference for this change set."},
-                "sylvae": {"linked": False,
-                           "reason": "WeftMark does not yet surface a Sylvae run reference for this change set."},
-            }
+            # OpenCode / Sylvae correlation, resolved from WeftMark evidence
+            # producers. The Change Set detail endpoint
+            # (weftmark.kanban-projection.v0, /v0/kanban/changes/{id}) carries
+            # evidence_refs with a producer id and artifact uris; a producer
+            # that namespaces itself "sylvae:run/<id>" or "opencode:session/<id>"
+            # resolves to a real link. Absent (older WeftMark pin, or no such
+            # producer) -> declared "not linked yet", never a fabricated join.
+            # See docs/WEFTMARK-RUNTIME-LINKS-SCOPE.md.
+            detail = self._backend_get_json(
+                "weftmark", "/v0/kanban/changes/" + urllib.parse.quote(cs_id, safe="")
+            ) if "weftmark" in cfg.backends else None
+            evidence_refs = []
+            if isinstance(detail, dict) and isinstance(detail.get("card"), dict):
+                evidence_refs = detail["card"].get("evidence_refs") or []
+            related = {}
+            for system in ("opencode", "sylvae"):
+                refs = []
+                seen = set()
+                for ref in evidence_refs:
+                    if not isinstance(ref, dict):
+                        continue
+                    candidates = [(ref.get("producer") or {}).get("id")]
+                    candidates.extend(ref.get("artifacts") or [])
+                    for cand in candidates:
+                        if isinstance(cand, str) \
+                                and cand.startswith(system + ":") and cand not in seen:
+                            seen.add(cand)
+                            refs.append({"id": cand, "evidence": ref.get("id")})
+                if refs:
+                    related[system] = {"linked": True, "refs": refs}
+                else:
+                    related[system] = {
+                        "linked": False,
+                        "reason": "No %s reference on this change set's evidence yet." % system,
+                    }
 
             self._json(200, {
                 "schema": "rebekah.change-set.v1",

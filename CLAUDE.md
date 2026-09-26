@@ -18,12 +18,19 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   Ephor over loopback HTTP, emits normalized evidence, fails closed).
 - `nix/govern.sh` — `rebekah-govern`: attaches connector output to WeftMark as
   `governance` evidence and requires it for a review decision.
+- `nix/sylvae-evidence.sh` — `rebekah-sylvae-evidence`: the Sylvae↔WeftMark
+  bridge. Preallocates a Sylvae run id and records a Sylvae skill run as WeftMark
+  evidence on a Change Set, attributed `--producer-id sylvae:run/<id>`, by
+  running `sylvae run … --run-id <id>` through `weftmark evidence run` (WeftMark
+  stays the evidence authority). The gateway then resolves the `related.sylvae`
+  link from that producer id.
 - `nix/gateway.py` — `rebekah-gateway`: the single authenticated entry point for
   Rebekah's API (password, token and/or OIDC auth), fronting the loopback
   backends. Also serves the built-in web console, `GET /api/info`, and the
   versioned aggregation API (`GET /api/v1/session|system|attention`, and
   `GET /api/v1/change-sets[/{id}]` — the Change Set spine correlating WeftMark
-  git/evidence/review/handoff/claims/tasks, with OpenCode/Sylvae link slots) the
+  git/evidence/review/handoff/claims/tasks, resolving OpenCode/Sylvae links from
+  WeftMark evidence producer ids where present) the
   console consumes instead of reverse-engineering each backend — every response
   carries a `schema`, `source`, and `observed_at` (see
   `docs/HUMAN-INTERFACE-PLAN.md` and `docs/UI-INSPIRATION-RAGBAZ-KANBAN.md`).
