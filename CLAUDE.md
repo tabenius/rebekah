@@ -24,13 +24,20 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   running `sylvae run … --run-id <id>` through `weftmark evidence run` (WeftMark
   stays the evidence authority). The gateway then resolves the `related.sylvae`
   link from that producer id.
+- `nix/opencode-evidence.sh` — `rebekah-opencode-evidence`: the OpenCode↔WeftMark
+  bridge, symmetric to the Sylvae one. OpenCode mints its own session id, so this
+  *receives* it in `REBEKAH_OPENCODE_SESSION_ID` (validated `[A-Za-z0-9._-]`, fails
+  closed) rather than preallocating, and records the operator's verification
+  command as WeftMark evidence attributed `--producer-id opencode:session/<id>`.
+  The gateway then resolves the `related.opencode` link from that producer id.
 - `nix/gateway.py` — `rebekah-gateway`: the single authenticated entry point for
   Rebekah's API (password, token and/or OIDC auth), fronting the loopback
   backends. Also serves the built-in web console, `GET /api/info`, and the
   versioned aggregation API (`GET /api/v1/session|system|attention`, and
   `GET /api/v1/change-sets[/{id}]` — the Change Set spine correlating WeftMark
   git/evidence/review/handoff/claims/tasks, resolving OpenCode/Sylvae links from
-  WeftMark evidence producer ids where present) the
+  WeftMark evidence producer ids *and active-claim sessions* where present — a
+  past run or a session working the change set now) the
   console consumes instead of reverse-engineering each backend — every response
   carries a `schema`, `source`, and `observed_at` (see
   `docs/HUMAN-INTERFACE-PLAN.md` and `docs/UI-INSPIRATION-RAGBAZ-KANBAN.md`).
@@ -55,6 +62,8 @@ governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
   a systemd user unit, and setup notes (workspace ACLs for UIDs 10002/10004).
 - `tests/smoke.sh` — end-to-end container test (Docker).
 - `tests/ephor-connector.sh` + `tests/ephor-mock.py` — connector unit tests.
+- `tests/opencode-evidence.sh` — the OpenCode↔WeftMark bridge (fail-closed
+  guards + `opencode:session/<id>` attribution) against a stubbed `weftmark`.
 - `tests/gateway.sh` + `tests/gateway-oidc.py` — gateway auth/proxy unit test
   (token + fail-closed guards on stdlib; OIDC when PyJWT is present).
 - `tests/dash-push.py` — the Dash push client against mock WeftMark and Dash

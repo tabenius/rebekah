@@ -106,6 +106,15 @@ EVIDENCE_REFS = {
          "producer": {"kind": "worker", "id": "opencode:session/s7"}, "artifacts": []},
     ],
 }
+# The detail also carries claims.active[] with the runtime identity of the
+# workers holding the change set now (weftmark#42). cs-1 has an active OpenCode
+# session distinct from its evidence producers, so the gateway resolves it as an
+# additional, active:true link -- the "working now, before evidence" case.
+CLAIM_REFS = {
+    "cs-1": [
+        {"id": "claim-1", "agent": "worker-1", "session": "opencode:session/live-9"},
+    ],
+}
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def do_GET(self):
@@ -122,6 +131,8 @@ class H(BaseHTTPRequestHandler):
                 return
             detail_card = dict(card)
             detail_card["evidence_refs"] = EVIDENCE_REFS.get(cid, [])
+            detail_card["claims"] = dict(card.get("claims") or {})
+            detail_card["claims"]["active"] = CLAIM_REFS.get(cid, [])
             body = json.dumps({
                 "schema": KANBAN["schema"],
                 "generated_at": "2026-08-19T12:00:00+00:00",
@@ -465,6 +476,14 @@ if grep -q '"sylvae:run/9f2c1a"' "$csd" && grep -q '"opencode:session/s7"' "$csd
   pass "detail resolves OpenCode/Sylvae links from evidence producers"
 else
   fail "cs detail did not resolve runtime links: $(cat "$csd")"
+fi
+# cs-1 also has an active claim whose session names a distinct OpenCode session;
+# the gateway resolves it as an additional active:true link (working now, before
+# evidence), alongside the evidence-based one.
+if grep -q '"opencode:session/live-9"' "$csd" && grep -qE '"active": *true' "$csd"; then
+  pass "detail resolves runtime links from an active claim's session"
+else
+  fail "cs detail did not resolve the active-claim link: $(cat "$csd")"
 fi
 # cs-2 has no such producer -> the slots stay honestly unlinked.
 csd2="$work/csd2.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets/cs-2" > "$csd2"
