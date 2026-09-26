@@ -66,6 +66,10 @@ jobs:
           # result is docker-archive:<gzip tar>; skopeo reads it directly.
           skopeo copy "docker-archive:$(readlink -f result)" "docker://${IMAGE}:${PRIMARY}"
           skopeo copy "docker://${IMAGE}:${PRIMARY}" "docker://${IMAGE}:${SHA_TAG}"
+          # The digest to pin (deploy/podman/README.md, "Updating").
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${SHA_TAG}")"
+          echo "Published ${IMAGE}@${digest}"
+          echo "Published \`${IMAGE}@${digest}\` (${PRIMARY}, ${SHA_TAG})" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stage tarball for release
         if: github.ref_type == 'tag'
@@ -147,7 +151,9 @@ jobs:
             echo "::error::${IMAGE} is publicly pullable; make the package private now."
             exit 1
           fi
-          echo "Pushed ${IMAGE}:${PRIMARY} and :${SHA_TAG} (private)."
+          digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${SHA_TAG}")"
+          echo "Published ${IMAGE}@${digest} (private)"
+          echo "Published \`${IMAGE}@${digest}\` (${PRIMARY}, ${SHA_TAG}; private)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: No Ephor token
         if: env.HAS_EPHOR_TOKEN != 'true'
