@@ -744,24 +744,33 @@ def make_handler(cfg, auth):
             for t in tasks:
                 links.append(t)
 
-            # OpenCode / Sylvae correlation, resolved from WeftMark evidence
-            # producers. The Change Set detail endpoint
-            # (weftmark.kanban-projection.v0, /v0/kanban/changes/{id}) carries
-            # evidence_refs with a producer id and artifact uris; a producer
-            # that namespaces itself "sylvae:run/<id>" or "opencode:session/<id>"
-            # resolves to a real link. Absent (older WeftMark pin, or no such
-            # producer) -> declared "not linked yet", never a fabricated join.
+            # OpenCode / Sylvae correlation, resolved from WeftMark runtime
+            # identity. The Change Set detail endpoint
+            # (weftmark.kanban-projection.v0, /v0/kanban/changes/{id}) carries two
+            # seams, both namespaced by the producing/claiming tool as
+            # "sylvae:run/<id>" or "opencode:session/<id>":
+            #   - evidence_refs: producer id + artifact uris of PAST runs (what
+            #     has run against this change set);
+            #   - claims.active[].session: the session of a worker holding the
+            #     change set RIGHT NOW, before it has produced any evidence.
+            # A match resolves to a real link; absent (older WeftMark pin, or no
+            # such id) -> "not linked yet", never a fabricated join. Evidence
+            # refs are preferred order; an active-claim ref is tagged active:true
+            # so a consumer can distinguish "working now" from "has run".
             # See docs/WEFTMARK-RUNTIME-LINKS-SCOPE.md.
             detail = self._backend_get_json(
                 "weftmark", "/v0/kanban/changes/" + urllib.parse.quote(cs_id, safe="")
             ) if "weftmark" in cfg.backends else None
-            evidence_refs = []
-            if isinstance(detail, dict) and isinstance(detail.get("card"), dict):
-                evidence_refs = detail["card"].get("evidence_refs") or []
+            detail_card = detail["card"] if (
+                isinstance(detail, dict) and isinstance(detail.get("card"), dict)
+            ) else {}
+            evidence_refs = detail_card.get("evidence_refs") or []
+            active_claims = (detail_card.get("claims") or {}).get("active") or []
             related = {}
             for system in ("opencode", "sylvae"):
                 refs = []
                 seen = set()
+                prefix = system + ":"
                 for ref in evidence_refs:
                     if not isinstance(ref, dict):
                         continue
@@ -769,15 +778,25 @@ def make_handler(cfg, auth):
                     candidates.extend(ref.get("artifacts") or [])
                     for cand in candidates:
                         if isinstance(cand, str) \
-                                and cand.startswith(system + ":") and cand not in seen:
+                                and cand.startswith(prefix) and cand not in seen:
                             seen.add(cand)
                             refs.append({"id": cand, "evidence": ref.get("id")})
+                for claim in active_claims:
+                    if not isinstance(claim, dict):
+                        continue
+                    session = claim.get("session")
+                    if isinstance(session, str) \
+                            and session.startswith(prefix) and session not in seen:
+                        seen.add(session)
+                        refs.append({"id": session, "claim": claim.get("id"),
+                                     "active": True})
                 if refs:
                     related[system] = {"linked": True, "refs": refs}
                 else:
                     related[system] = {
                         "linked": False,
-                        "reason": "No %s reference on this change set's evidence yet." % system,
+                        "reason": "No %s reference on this change set's evidence "
+                                  "or active claims yet." % system,
                     }
 
             self._json(200, {
