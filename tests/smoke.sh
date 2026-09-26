@@ -194,7 +194,7 @@ for _ in $(seq 1 90); do
     fi
     "$runtime" exec "$name" curl -sf --max-time 5 -H "Authorization: Bearer $gw_token" \
       http://127.0.0.1:8080/api/v1/oversight |
-      jq -e '.schema == "rebekah.oversight.v1" and .stale == false and .decisions.oversight == true' >/dev/null
+      jq -e '.schema == "rebekah.oversight.v1" and .source == "rebekah-gateway" and .stale == false and .decisions.oversight == true' >/dev/null
 
     # Restart on the same state: the entrypoint must set up state directories
     # the service UIDs already own, still without CAP_FOWNER.
