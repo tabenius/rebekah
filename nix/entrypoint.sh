@@ -386,9 +386,13 @@ serve() {
   wm_help="$(weftmark-http --help 2>/dev/null || true)"
   if [[ "$wm_help" =~ [{,]review[,}] ]]; then
     weftmark_write_token="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
+    # A fresh root-owned file each boot, chmod before chown: once WeftMark owns
+    # it, changing its mode would need CAP_FOWNER, which the supervisor lacks
+    # (a restart finds the previous boot's file still owned by 10004).
+    rm -f "$weftmark_write_token_file"
     ( umask 077; printf '%s' "$weftmark_write_token" >"$weftmark_write_token_file" )
-    chown 10004:10004 "$weftmark_write_token_file"
     chmod 0400 "$weftmark_write_token_file"
+    chown 10004:10004 "$weftmark_write_token_file"
     weftmark_control=(--write-token-file "$weftmark_write_token_file" --write-capability review)
   fi
 
