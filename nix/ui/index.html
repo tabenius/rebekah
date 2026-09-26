@@ -809,6 +809,18 @@
     offline:    { sym: "○", label: "Offline",        color: "var(--bad)",
                   remedy: "No response from the service. Check its log; restart only once the underlying cause is known." },
   };
+  // The opt-in Ephor integration, shown beside the services but never counted
+  // in the rollup: the baseline suite works without it (plan §1, §6.8).
+  const EPHOR_STATES = {
+    absent:   { label: "○ Not installed",
+                remedy: "The baseline suite works without Ephor. An administrator can add it later from an authorized source." },
+    disabled: { label: "○ Installed, not enabled",
+                remedy: "This image bundles Ephor, but it is off. Set REBEKAH_EPHOR_ENABLE=1 to supervise it here." },
+    external: { label: "◇ External",
+                remedy: "Governance evaluations go to the deployment at EPHOR_URL. Held-action review is not available here." },
+    enabled:  { label: "● Enabled",
+                remedy: "Ephor runs here. Held actions reach reviewers through RAGBAZ Dash." },
+  };
   // Global rollup precedence: worst state wins.
   const ROLLUP = ["offline", "attention", "installing", "ready"];
   const ROLLUP_TEXT = {
@@ -830,9 +842,12 @@
     const backends = (sys.ok && sys.data && sys.data.backends)
       ? Object.keys(sys.data.backends)
       : ((info && info.expose) || []);
-    const ephorOptional = (sys.ok && sys.data && sys.data.ephor)
-      ? !sys.data.ephor.exposed
-      : (backends.indexOf("ephor") < 0);
+    // Where the opt-in Ephor integration stands; an older gateway sends no
+    // state, only whether it is exposed.
+    const ephor = (sys.ok && sys.data && sys.data.ephor) || {};
+    const ephorState = ephor.state
+      || (ephor.exposed || backends.indexOf("ephor") >= 0 ? "enabled" : "absent");
+    const ephorOptional = backends.indexOf("ephor") < 0;
     tiles.textContent = "";
     if (!backends.length) {
       tiles.appendChild(el("div", "empty", "No backends exposed."));
@@ -864,12 +879,13 @@
         .catch(() => apply("offline", 0));
     });
     if (ephorOptional) {
+      const meta = EPHOR_STATES[ephorState] || EPHOR_STATES.absent;
       const tile = el("div", "tile optional");
       tile.appendChild(el("div", "name", "Ephor"));
       tile.appendChild(el("div", "sub", "optional governance integration"));
-      const state = el("div", "state", "○ Not installed"); state.style.color = "var(--muted)";
+      const state = el("div", "state", meta.label); state.style.color = "var(--muted)";
       tile.appendChild(state);
-      tile.appendChild(el("div", "remedy", "The baseline suite works without Ephor. An administrator can add it later from an authorized source."));
+      tile.appendChild(el("div", "remedy", meta.remedy));
       tiles.appendChild(tile);
     }
   }
@@ -1025,7 +1041,7 @@
         schema: "rebekah.system.v1", observed_at: new Date().toISOString(), source: "rebekah-gateway",
         service: "rebekah-gateway", auth: ["password"], ui: true,
         backends: { weftmark: { route: "/weftmark/" }, opencode: { route: "/opencode/" }, ollama: { route: "/ollama/" } },
-        ephor: { exposed: false, optional: true } } });
+        ephor: { state: "absent", exposed: false, optional: true } } });
     if (path === "/api/v1/attention") {
       const items = [];
       DEMO_BOARD.cards.forEach((c) => (c.attention || []).forEach((r) =>

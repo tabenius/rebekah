@@ -317,6 +317,22 @@ if printf '%s' "$def_info" | grep -q '"ephor"'; then
 else
   pass "Ephor API remains opt-in"
 fi
+# Naming ephor in REBEKAH_GATEWAY_EXPOSE is not opting in: without an enabled
+# Ephor (REBEKAH_EPHOR_STATE from the supervisor) there is no backend to expose.
+ep_port="$(free_port)"
+REBEKAH_GATEWAY_PORT="$ep_port" REBEKAH_GATEWAY_TOKEN="$token" \
+  REBEKAH_GATEWAY_EXPOSE="weftmark ephor" REBEKAH_EPHOR_STATE=disabled \
+  "$python" "$gateway" >"$work/gwe.log" 2>&1 &
+pids+=("$!")
+wait_url "http://127.0.0.1:$ep_port/healthz" || fail "ephor-disabled gateway did not start"
+ep_sys="$(body -H "Authorization: Bearer $token" "http://127.0.0.1:$ep_port/api/v1/system")"
+ep_code="$(code -H "Authorization: Bearer $token" "http://127.0.0.1:$ep_port/ephor/health")"
+if [[ "$ep_code" == 404 ]] && printf '%s' "$ep_sys" | grep -q '"state": "disabled"' \
+  && grep -q 'not exposing ephor' "$work/gwe.log"; then
+  pass "a disabled Ephor is reported, not exposed"
+else
+  fail "disabled Ephor exposed or misreported ($ep_code): $ep_sys"
+fi
 
 # === 2d. SQLite username/password login ====================================
 printf '\n== SQLite password login ==\n'
@@ -419,6 +435,11 @@ printf '%s' "$sys" | grep -q '"weftmark"' \
   && pass "/api/v1/system lists exposed backends" || fail "no backends: $sys"
 printf '%s' "$sys" | grep -q '"optional": true' \
   && pass "/api/v1/system marks Ephor optional" || fail "ephor not optional: $sys"
+printf '%s' "$sys" | grep -q '"state": "absent"' \
+  && pass "/api/v1/system reports Ephor absent by default" || fail "ephor state wrong: $sys"
+ovs="$(body -H "$auth_hdr" "$vbase/api/v1/oversight")"
+printf '%s' "$ovs" | grep -q '"enabled": false' && printf '%s' "$ovs" | grep -q '"stale": false' \
+  && pass "/api/v1/oversight is empty and current without Ephor" || fail "oversight without Ephor: $ovs"
 
 att="$(body -H "$auth_hdr" "$vbase/api/v1/attention")"
 printf '%s' "$att" | grep -q '"schema": "rebekah.attention.v1"' \

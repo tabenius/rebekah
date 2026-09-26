@@ -3,17 +3,14 @@
     "ephor-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790096671,
-        "narHash": "sha256-U1SQ8lJSqhvcMZkRFFbLS5xTxDqFnBBoVg/VJtR8RH8=",
-        "owner": "tabenius",
-        "repo": "BAZ.AI-governance",
-        "rev": "5b05af53d695f183e8a7954032a85cc8beeb113b",
-        "type": "github"
+        "lastModified": 1,
+        "narHash": "sha256-/TULOF6l23FKDLFo0EUdRFesf8FeYKrLk3HMYvNloXU=",
+        "path": "./nix/ephor-absent",
+        "type": "path"
       },
       "original": {
-        "owner": "tabenius",
-        "repo": "BAZ.AI-governance",
-        "type": "github"
+        "path": "./nix/ephor-absent",
+        "type": "path"
       }
     },
     "nixpkgs": {

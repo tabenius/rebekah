@@ -3,13 +3,17 @@
 Guidance for working in this repository. Rebekah packages a reproducible,
 self-hosted OCI image (built with Nix) that supervises four services for
 governed agentic software work: **OpenCode**, **Ollama**, **Sylvae**, and
-**WeftMark**, plus a fail-closed **Ephor/KAGP** governance connector.
+**WeftMark**, plus a fail-closed **Ephor/KAGP** governance connector. Ephor
+itself is **opt-in**: the baseline image has no Ephor; `image-ephor` bundles
+its bridge, which runs only with `REBEKAH_EPHOR_ENABLE=1`.
 
 ## Layout
 
-- `flake.nix` — inputs and outputs (`packages.<system>.image`, `.weftmark`,
-  `.sylvae`; `checks.<system>` = a `shellcheck` derivation plus the weftmark and
-  sylvae package builds).
+- `flake.nix` — inputs and outputs (`packages.<system>.image`, `.image-ephor`,
+  `.weftmark`, `.sylvae`, `.ephor`; `checks.<system>` = a `shellcheck`
+  derivation plus the weftmark and sylvae package builds — never Ephor).
+  `ephor-src` defaults to the placeholder `nix/ephor-absent/`; `nix/ephor.rev`
+  pins the private revision the opt-in build overrides it with.
 - `nix/image.nix` — the `dockerTools.buildLayeredImage`: contents, `/etc/passwd`
   and `/etc/group`, state-dir modes, entrypoint install, OCI config.
 - `nix/entrypoint.sh` — supervisor: `serve` / `doctor` / `health`. Sets up state
@@ -82,11 +86,17 @@ bash tests/ephor-connector.sh           # connector pass/fail-closed cases
 shellcheck --severity=warning nix/*.sh tests/*.sh
 ```
 
-Fetching the private `ephor-src` input (`github:tabenius/BAZ.AI-governance`)
-needs a GitHub token. Locally set `access-tokens = github.com=<token>` in
-`nix.conf`; in CI it comes from the `EPHOR_READ_TOKEN` repository secret. To
-build without it (e.g. offline), override the unused input:
-`nix build .#image --override-input ephor-src path:/tmp/placeholder`.
+The baseline (`nix flake check`, `.#image`) needs public sources only. Nix
+fetches every locked input, so the private Ephor source is never locked: the
+opt-in build overrides the placeholder input with the pinned revision, and
+needs a GitHub token (`access-tokens = github.com=<token>` in `nix.conf`; in
+CI the `EPHOR_READ_TOKEN` secret, used only by the `ephor` job):
+
+```bash
+nix build .#image-ephor \
+  --override-input ephor-src "github:tabenius/BAZ.AI-governance/$(cat nix/ephor.rev)"
+docker load < result && REBEKAH_SMOKE_EPHOR=1 bash tests/smoke.sh
+```
 
 **Always validate a change in a real container** (build the image, `docker
 load`, run `tests/smoke.sh`) before pushing — a runtime regression will not show
@@ -104,6 +114,7 @@ distinct UID/GID and no ambient privileges. All ports are loopback-only.
 | opencode | 10002:10002   | 4096   | `/var/lib/rebekah/opencode` | `/global/health` |
 | sylvae   | 10003:10003   | 8971   | `/var/lib/rebekah/sylvae`   | `/` |
 | weftmark | 10004:10004   | 8765   | `/var/lib/rebekah/weftmark` | `/healthz` |
+| ephor (opt-in) | 10006:10006 | 9800 | `/var/lib/rebekah/ephor` | `/health` |
 | gateway  | 10005:10005   | 8080   | `/var/lib/rebekah/gateway` (`0700`) | `/healthz` |
 
 The four core services bind loopback only. The **gateway** is the exception by
@@ -221,6 +232,15 @@ them in any change:
     `COMMAND_KINDS` and strict id/actor patterns. It never approves a hold that
     is not pending or is past its deadline, applies each command once, and
     never logs a credential. Guarded by `tests/dash-push.py`.
+12. **Ephor is opt-in.** No baseline build, check, health result, console
+    state or Dash view may need Ephor: the public flake never locks its
+    private source, `doctor`/`health` count it only when
+    `REBEKAH_EPHOR_ENABLE=1`, and the gateway reports it as
+    `absent`/`disabled`/`external`/`enabled` (`REBEKAH_EPHOR_STATE` from the
+    supervisor), never as a failed service. Only an enabled Ephor gets a
+    reviewer token or a gateway backend. Asking for governance without it
+    still fails closed. Guarded by `tests/smoke.sh` (baseline and
+    `REBEKAH_SMOKE_EPHOR=1`), `tests/gateway.sh` and `tests/dash-push.py`.
 
 ## Conventions
 

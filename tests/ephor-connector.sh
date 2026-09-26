@@ -107,6 +107,18 @@ REBEKAH_CHANGE_SET_ID=cs-test REBEKAH_GOVERNANCE_EVIDENCE="$evidence" \
 status="$?"
 set -e
 [[ "$status" -ne 0 ]]
-jq -e '.state == "unavailable" and .reason == "EPHOR_URL is not configured"' "$evidence" >/dev/null
+jq -e '.state == "unavailable" and .reason == "Ephor is not enabled (set REBEKAH_EPHOR_ENABLE=1 or EPHOR_URL)"' "$evidence" >/dev/null
+
+# Opting in to the bundled bridge (REBEKAH_EPHOR_ENABLE=1) needs no EPHOR_URL:
+# the connector reaches EPHOR_HOST:EPHOR_PORT, where the supervisor runs it.
+start_server pass
+ephor_port="${EPHOR_URL##*:}"
+unset EPHOR_URL
+evidence="$fixture/opt-in.json"
+REBEKAH_CHANGE_SET_ID=cs-test REBEKAH_GOVERNANCE_EVIDENCE="$evidence" \
+  REBEKAH_EPHOR_ENABLE=1 EPHOR_HOST=127.0.0.1 EPHOR_PORT="$ephor_port" \
+  bash "$connector" evaluate >/dev/null 2>&1
+stop_server
+jq -e '.state == "passed"' "$evidence" >/dev/null
 
 printf 'ok: Ephor connector passes and fails closed\n'

@@ -1,5 +1,9 @@
 { dockerTools, bash, coreutils, curl, findutils, git, gnugrep, jq, ollama
-, ephor, opencode, procps, python3, tini, util-linux, weftmark, sylvae }:
+, opencode, procps, python3, tini, util-linux, weftmark, sylvae
+  # Ephor is opt-in (docs/HUMAN-INTERFACE-PLAN.md §1, §6.8): the baseline image
+  # is built without it, from public sources only. `.#image-ephor` passes the
+  # governance-http bridge in; it still starts only with REBEKAH_EPHOR_ENABLE=1.
+, ephor ? null, lib }:
 
 let
   # The gateway runs on its own Python with PyJWT + cryptography for OIDC JWT
@@ -9,12 +13,12 @@ let
 in
 dockerTools.buildLayeredImage {
   name = "rebekah";
-  tag = "latest";
+  tag = if ephor == null then "latest" else "ephor";
 
   contents = [
-    bash coreutils curl ephor findutils git gnugrep jq ollama opencode procps sylvae
+    bash coreutils curl findutils git gnugrep jq ollama opencode procps sylvae
     tini util-linux weftmark dockerTools.caCertificates
-  ];
+  ] ++ lib.optional (ephor != null) ephor;
 
   extraCommands = ''
     mkdir -p \
@@ -102,7 +106,10 @@ dockerTools.buildLayeredImage {
       "SYLVAE_PORT=8971"
       "WEFTMARK_HOST=127.0.0.1"
       "WEFTMARK_PORT=8765"
-      "EPHOR_URL=http://127.0.0.1:9800"
+      # Ephor stays off unless an operator opts in: REBEKAH_EPHOR_ENABLE=1
+      # supervises the bundled bridge (image-ephor only) on EPHOR_HOST:PORT;
+      # EPHOR_URL alone points rebekah-ephor at an external deployment.
+      "REBEKAH_EPHOR_ENABLE=0"
       "EPHOR_HOST=127.0.0.1"
       "EPHOR_PORT=9800"
       # API gateway: loopback by default; set REBEKAH_GATEWAY_HOST + TLS to
@@ -135,6 +142,7 @@ dockerTools.buildLayeredImage {
       "org.opencontainers.image.title" = "Rebekah";
       "org.opencontainers.image.description" = "Runtime for governed agentic software work";
       "org.opencontainers.image.source" = "https://github.com/tabenius/rebekah";
+      "cc.ragbaz.rebekah.ephor" = if ephor == null then "absent" else "bundled";
     };
   };
 }
