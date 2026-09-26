@@ -32,7 +32,9 @@ The current image contains:
 
 The image also includes the fail-closed **Ephor/KAGP connector**. Ephor is the
 **Konsonans AI Governance Platform (KAGP)**, maintained in
-[`tabenius/BAZ.AI-governance`](https://github.com/tabenius/BAZ.AI-governance).
+[`tabenius/BAZ.AI-governance`](https://github.com/tabenius/BAZ.AI-governance),
+and is an **opt-in** integration: the published image runs without it (see
+*Ephor governance (opt-in)*).
 
 ## System boundary
 
@@ -42,7 +44,7 @@ The image also includes the fail-closed **Ephor/KAGP connector**. Ephor is the
 | Ollama | Local model inference | Packaged and supervised |
 | Sylvae | Skill execution and run evidence | Packaged and supervised |
 | WeftMark | Engineering provenance, review, evidence policy, and readiness | Packaged and supervised |
-| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records | Fail-closed connector implemented |
+| Ephor/KAGP | Governance policy, risk, oversight, and audit-chain records | Opt-in: `image-ephor` + `REBEKAH_EPHOR_ENABLE=1`; fail-closed connector |
 | Rebekah | Packaging, isolation, wiring, lifecycle, and integration verification | Implemented bootstrap |
 
 Each runtime service has a distinct UID, a distinct primary group (gid == uid),
@@ -228,7 +230,8 @@ pending or is past its deadline, and WeftMark decides a review's outcome from
 the evidence. The two credentials this needs are minted per boot and given
 only to the gateway and to Ephor or WeftMark respectively; agents never see
 them, so an agent cannot decide its own hold. `GET /api/v1/oversight` serves
-the same view to authenticated clients.
+the same view to authenticated clients. Held actions exist only when Ephor is
+opted in; otherwise the view is empty and says `"enabled": false`.
 
 ## Correlation spine
 
@@ -269,18 +272,28 @@ for offline/air-gapped installs. This is what
 [v-BAZ](https://github.com/tabenius/v-BAZ) pulls to run Rebekah as its default AI
 orchestration/governance platform (registry pull, ESP-staged tarball fallback).
 
-The flake lock pins nixpkgs, WeftMark, Sylvae, and the BAZ.AI-governance
-(Ephor/KAGP) source for reproducible evaluation. If `ephor-src` is not yet in
-your local `flake.lock`, run `nix flake lock` (or `nix flake update ephor-src`)
-once to record the pin.
+The flake lock pins nixpkgs, WeftMark, and Sylvae. `nix build .#image` and
+`nix flake check` need public sources only: the published image does not
+include Ephor.
 
-`tabenius/BAZ.AI-governance` is private, so fetching `ephor-src` requires a
-GitHub token with read access to it. Locally, add it to `~/.config/nix/nix.conf`
-as `access-tokens = github.com=<token>` (or `NIX_CONFIG`). In CI, set the
-`EPHOR_READ_TOKEN` repository secret to a PAT (or fine-grained token) with read
-access to that repo; the workflow passes it to Nix as the github.com access
-token. The default `GITHUB_TOKEN` cannot read another private repository, so
-without this secret `nix flake check` fails with a `404` on `ephor-src`.
+### Opt-in Ephor image
+
+Ephor is an opt-in integration built from the private
+`tabenius/BAZ.AI-governance` repository. The flake's `ephor-src` input points
+at an in-repo placeholder (`nix/ephor-absent/`); `nix/ephor.rev` pins the
+revision to build instead:
+
+```bash
+nix build .#image-ephor \
+  --override-input ephor-src "github:tabenius/BAZ.AI-governance/$(cat nix/ephor.rev)"
+docker load < result   # rebekah:ephor
+```
+
+Fetching it requires a GitHub token with read access: locally
+`access-tokens = github.com=<token>` in `~/.config/nix/nix.conf` (or
+`NIX_CONFIG`); in CI the `EPHOR_READ_TOKEN` repository secret, which the `ephor`
+job uses to build and smoke-test this image. Without the secret that job skips
+itself. The `rebekah:ephor` image is never published to GHCR.
 
 ## Run
 
@@ -341,22 +354,31 @@ docker run --rm --mount type=bind,src="$PWD",dst=/workspace rebekah:latest docto
 docker exec <container-name> rebekah-health
 ```
 
-## Ephor/KAGP governance
+## Ephor governance (opt-in)
 
-Rebekah packages and supervises KAGP's Rust `governance-http` bridge on loopback
-by default. Evaluate a Change Set against that in-container service:
+Ephor (the governance engine, KAGP protocol) is optional. Nothing in the
+baseline suite needs it: without it, health, the console, the Dash views and
+WeftMark reviews all work, and `/api/v1/system` reports it as `absent`
+(`disabled` when the image bundles it but it is off, `external` when
+`EPHOR_URL` points elsewhere, `enabled` when it runs here).
+
+Asking for governance without it fails closed: `rebekah-govern` records
+`unavailable` governance evidence and the Change Set does not become ready.
+
+To opt in, run the `rebekah:ephor` image (see *Opt-in Ephor image*) with
+`REBEKAH_EPHOR_ENABLE=1`. The supervisor then runs the `governance-http` bridge
+on loopback (UID 10006), health-checks it, and mints the reviewer token that
+lets RAGBAZ Dash decide held actions. Evaluate a Change Set against it:
 
 ```bash
-# EPHOR_URL already defaults to http://127.0.0.1:9800 in the image
-export REBEKAH_CHANGE_SET_ID=cs-example
-export REBEKAH_SYLVAE_RUN_ID=run-example
-rebekah-ephor evaluate
+docker exec -e REBEKAH_CHANGE_SET_ID=cs-example <container> rebekah-govern
 ```
 
-To use an external KAGP deployment instead, set `REBEKAH_EPHOR_ENABLE=0` and
-provide `EPHOR_URL`; the supervisor then skips the internal bridge and its health
-probe. Add `ephor` to `REBEKAH_GATEWAY_EXPOSE` only when authenticated remote
-access to the governance API is intentionally required.
+To use an external KAGP deployment instead, leave `REBEKAH_EPHOR_ENABLE` at `0`
+and set `EPHOR_URL`; `rebekah-ephor` then evaluates against it (held-action
+review stays with that deployment). Add `ephor` to `REBEKAH_GATEWAY_EXPOSE` only
+when authenticated remote access to a local governance API is intentionally
+required; it is ignored unless Ephor is enabled.
 
 For the Cloudflare Worker API, also set `EPHOR_API_STYLE=worker`. An optional
 `EPHOR_AUTH_TOKEN` is sent as a bearer token. Successful evaluations produce
@@ -376,7 +398,10 @@ bash tests/smoke.sh
 
 The test creates a disposable Git repository, starts the container with a
 read-only root filesystem, and requires successful health responses from all
-five services, including a real Ephor capture/finalize governance cycle.
+services. By default it tests the baseline image and checks that Ephor is
+reported absent and that asking for governance fails closed. With the opt-in
+image loaded, `REBEKAH_SMOKE_EPHOR=1 bash tests/smoke.sh` enables Ephor and
+requires a real capture/finalize governance cycle.
 
 ## Repository layout
 
@@ -388,7 +413,7 @@ five services, including a real Ephor capture/finalize governance cycle.
   shutdown.
 - `nix/gateway.py` is the authenticated API gateway (`rebekah-gateway`).
 - `nix/ui/` is the gateway's built-in web console (static, served same-origin).
-- `nix/packages/` packages WeftMark, Sylvae, and Ephor/KAGP from pinned sources.
+- `nix/packages/` packages WeftMark, Sylvae, and (opt-in) Ephor/KAGP from pinned sources.
 - `tests/smoke.sh` verifies the loaded image through Docker.
 - `tests/gateway.sh` (+ `tests/gateway-oidc.py`) unit-tests the gateway's auth,
   routing, and fail-closed guards.
@@ -403,8 +428,8 @@ five services, including a real Ephor capture/finalize governance cycle.
 ## Current status
 
 **Core runtime complete.** The reproducible image packages and supervises
-OpenCode, Ollama, Sylvae, WeftMark, and KAGP's Ephor governance bridge. The image
-also provides `rebekah-ephor`, which calls the bridge's capture/finalize boundary
+OpenCode, Ollama, Sylvae, and WeftMark; the opt-in `image-ephor` build adds
+KAGP's Ephor governance bridge. The image also provides `rebekah-ephor`, which calls the bridge's capture/finalize boundary
 and emits normalized typed evidence.
 CI validates approval plus fail-closed denial, hold, malformed-response,
 unavailable-service, and missing-configuration paths.
@@ -412,6 +437,7 @@ unavailable-service, and missing-configuration paths.
 **Governance attachment complete.** `rebekah-govern` attaches the connector
 output through WeftMark's real evidence interface as dedicated
 `security:governance` evidence, requires it for the review decision, and the
-smoke test proves the readiness effect. See
+smoke tests prove the readiness effect both ways: ready with Ephor enabled,
+not ready (fail closed) without it. See
 [docs/ephor-governance-worker.md](docs/ephor-governance-worker.md) for the
 merged reference implementation the connector calls into.

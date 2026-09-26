@@ -18,7 +18,11 @@ weftmark_host="${WEFTMARK_HOST:-127.0.0.1}"
 weftmark_port="${WEFTMARK_PORT:-8765}"
 ephor_host="${EPHOR_HOST:-127.0.0.1}"
 ephor_port="${EPHOR_PORT:-9800}"
-ephor_enable="${REBEKAH_EPHOR_ENABLE:-1}"
+# Ephor is opt-in (docs/HUMAN-INTERFACE-PLAN.md §1, §6.8): nothing in the
+# baseline suite needs it, and its absence is never a failure. Set
+# REBEKAH_EPHOR_ENABLE=1 to supervise the bundled bridge (the image-ephor
+# build), or leave it 0 and set EPHOR_URL to use an external deployment.
+ephor_enable="${REBEKAH_EPHOR_ENABLE:-0}"
 
 # The gateway is the single authenticated entry point for Rebekah's API
 # (invariant #2's "authenticated TLS proxy"). It binds loopback by default;
@@ -74,11 +78,13 @@ doctor() {
     failed=1
   fi
 
-  if command -v governance-http >/dev/null 2>&1; then
-    printf 'ok      binary/governance-http\n'
-  else
-    printf 'failed  binary/governance-http missing\n' >&2
+  local ephor
+  ephor="$(ephor_state)"
+  if [[ "$ephor" == enabled ]] && ! command -v governance-http >/dev/null 2>&1; then
+    printf 'failed  ephor/enabled but this image has no governance-http (build .#image-ephor)\n' >&2
     failed=1
+  else
+    printf 'ok      ephor/%s\n' "$ephor"
   fi
 
   if command -v rebekah-ephor >/dev/null 2>&1; then
@@ -118,6 +124,24 @@ doctor() {
     printf 'pending correlation/sylvae_run_id\n'
   fi
   return "$failed"
+}
+
+# Where Ephor stands in this container, for doctor and the gateway (never a
+# health failure unless an operator enabled it):
+#   absent    not in this image and not configured
+#   disabled  bundled (image-ephor) but REBEKAH_EPHOR_ENABLE is not 1
+#   external  EPHOR_URL points rebekah-ephor at a deployment elsewhere
+#   enabled   the bundled bridge is supervised here
+ephor_state() {
+  if [[ "$ephor_enable" == 1 ]]; then
+    printf 'enabled'
+  elif [[ -n "${EPHOR_URL:-}" ]]; then
+    printf 'external'
+  elif command -v governance-http >/dev/null 2>&1; then
+    printf 'disabled'
+  else
+    printf 'absent'
+  fi
 }
 
 # Resolve the OpenCode server password: an operator-provided value, otherwise
@@ -167,7 +191,7 @@ health() {
     "${oc_auth[@]}" || failed=1
   check_url sylvae "http://$sylvae_host:$sylvae_port/" || failed=1
   check_url weftmark "http://$weftmark_host:$weftmark_port/healthz" || failed=1
-  if [[ "$ephor_enable" != 0 ]]; then
+  if [[ "$ephor_enable" == 1 ]]; then
     check_url ephor "http://$ephor_host:$ephor_port/health" || failed=1
   fi
   if [[ "$gateway_enable" != 0 ]]; then
@@ -378,9 +402,14 @@ serve() {
   # one backend that checks it, as a per-command environment variable (not
   # exported), so no other service UID, OpenCode's agents included, inherits
   # it: the actions being reviewed cannot decide their own review.
-  local oversight_token weftmark_write_token="" wm_help
+  local oversight_token="" weftmark_write_token="" wm_help ephor
   local -a weftmark_control=()
-  oversight_token="${EPHOR_OVERSIGHT_TOKEN:-$(head -c 24 /dev/urandom | base64 | tr -d '\n=')}"
+  ephor="$(ephor_state)"
+  # No Ephor here, no reviewer credential: the gateway then reports oversight
+  # as not enabled instead of offering decisions nothing could apply.
+  if [[ "$ephor" == enabled ]]; then
+    oversight_token="${EPHOR_OVERSIGHT_TOKEN:-$(head -c 24 /dev/urandom | base64 | tr -d '\n=')}"
+  fi
   # Only a WeftMark with the review capability accepts it; an older one would
   # refuse to start, so enable it only when it is there.
   wm_help="$(weftmark-http --help 2>/dev/null || true)"
@@ -399,9 +428,10 @@ serve() {
       --host "$weftmark_host" --port "$weftmark_port" \
       "${weftmark_control[@]}"
 
-  # KAGP's local governance bridge is supervised in-container by default. Set
-  # REBEKAH_EPHOR_ENABLE=0 and EPHOR_URL to use an external deployment instead.
-  if [[ "$ephor_enable" != 0 ]]; then
+  # Ephor's local governance bridge (KAGP protocol) runs only when an operator
+  # opted in with REBEKAH_EPHOR_ENABLE=1; doctor has already refused an image
+  # that does not bundle it.
+  if [[ "$ephor" == enabled ]]; then
     EPHOR_OVERSIGHT_TOKEN="$oversight_token" run_as 10006 "$state_dir/ephor" \
       governance-http \
         --listen "$ephor_host:$ephor_port" \
@@ -424,6 +454,7 @@ serve() {
       REBEKAH_ADMIN_PASSWORD="${REBEKAH_ADMIN_PASSWORD:-}" \
       REBEKAH_DASH_PUSH_KEY="${REBEKAH_DASH_PUSH_KEY:-}" \
       EPHOR_OVERSIGHT_TOKEN="$oversight_token" \
+      REBEKAH_EPHOR_STATE="$ephor" \
       REBEKAH_WEFTMARK_WRITE_TOKEN="$weftmark_write_token" \
       run_as 10005 "$run_dir" rebekah-gateway
   fi

@@ -111,8 +111,10 @@ adapter, or unknown scope is not equivalent to approval.
 The bootstrap deployment follows these constraints:
 
 - internal services bind to loopback or a private container network;
-- the in-image Ephor bridge is the default; an external deployment requires
-  `REBEKAH_EPHOR_ENABLE=0` plus an explicit `EPHOR_URL`;
+- Ephor is opt-in: the baseline image does not include it; the `image-ephor`
+  build supervises its bridge only with `REBEKAH_EPHOR_ENABLE=1`, and an
+  external deployment is selected by an explicit `EPHOR_URL`. Without either,
+  a governance evaluation fails closed (`unavailable`) and nothing else does;
 - remote access is provided only through an authenticated TLS proxy or secure
   tunnel;
 - only declared interfaces are exposed;
@@ -126,9 +128,9 @@ The bootstrap deployment follows these constraints:
 
 ## Implemented Ephor transport
 
-Rebekah packages and supervises KAGP's Rust `governance-http` bridge on
-`127.0.0.1:9800` by default, and `rebekah-ephor` implements the transport
-boundary against it:
+When opted in, Rebekah supervises KAGP's Rust `governance-http` bridge on
+`127.0.0.1:9800`, and `rebekah-ephor` implements the transport boundary against
+it (or against `EPHOR_URL`):
 
 - `POST /capture` records the correlated Change Set action;
 - `POST /finalize` closes the entry and returns its audit-chain hash;

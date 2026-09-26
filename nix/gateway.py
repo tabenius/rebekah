@@ -60,6 +60,9 @@ HOP_BY_HOP = {
     "te", "trailer", "transfer-encoding", "upgrade", "host", "authorization",
 }
 
+# Where the opt-in Ephor integration stands (entrypoint.sh ephor_state).
+EPHOR_STATES = ("absent", "disabled", "external", "enabled")
+
 
 def _split_hostport(value, default_port):
     host, _, port = value.partition(":")
@@ -121,14 +124,21 @@ class Config:
         ep_port = int(env.get("EPHOR_PORT", "9800"))
         oc_pw = env.get("OPENCODE_SERVER_PASSWORD", "")
 
+        # Ephor is opt-in: the supervisor says where it stands (see
+        # ephor_state in entrypoint.sh). Only a bridge supervised here is a
+        # backend; otherwise there is nothing on EPHOR_PORT to reach.
+        state = env.get("REBEKAH_EPHOR_STATE", "absent").strip()
+        self.ephor_state = state if state in EPHOR_STATES else "absent"
+
         catalogue = {
             "weftmark": (wm_host, wm_port, None),
             "opencode": (oc_host, oc_port,
                          ("opencode", oc_pw) if oc_pw else None),
             "sylvae": (sy_host, sy_port, None),
             "ollama": (ol_host, ol_port, None),
-            "ephor": (ep_host, ep_port, None),
         }
+        if self.ephor_state == "enabled":
+            catalogue["ephor"] = (ep_host, ep_port, None)
         self.backends = {name: catalogue[name] for name in exposed if name in catalogue}
         # Every loopback backend, exposed or not, for the gateway's own calls
         # (the oversight view and applying decisions from Dash). Exposure only
@@ -138,9 +148,13 @@ class Config:
         # Human-in-the-loop decisions from Dash, applied locally. Each is off
         # unless its credential is set; the supervisor mints both per boot and
         # gives them to the gateway (and the one backend that checks each) only.
-        self.ephor_oversight_token = env.get("EPHOR_OVERSIGHT_TOKEN", "").strip()
+        self.ephor_oversight_token = (
+            env.get("EPHOR_OVERSIGHT_TOKEN", "").strip()
+            if self.ephor_state == "enabled" else "")
         self.weftmark_write_token = env.get("REBEKAH_WEFTMARK_WRITE_TOKEN", "").strip()
-        self.unknown_exposed = [name for name in exposed if name not in catalogue]
+        self.unknown_exposed = [
+            name for name in exposed if name not in catalogue and name != "ephor"]
+        self.ephor_not_enabled = "ephor" in exposed and "ephor" not in catalogue
 
         # Built-in web console (served static, same-origin). On by default; the
         # data calls it makes still go through the authenticated proxy.
@@ -542,9 +556,10 @@ def v1_system(cfg, auth):
         "auth": auth_schemes(cfg, auth),
         "ui": cfg.ui_enabled,
         "backends": backends,
-        # Ephor is optional: present it as installed-or-not, never as a
-        # failed baseline service (plan §1, §6.8).
-        "ephor": {"exposed": "ephor" in cfg.backends, "optional": True},
+        # Ephor is optional: present where it stands, never as a failed
+        # baseline service (plan §1, §6.8).
+        "ephor": {"state": cfg.ephor_state, "exposed": "ephor" in cfg.backends,
+                  "optional": True},
     }
 
 
@@ -624,13 +639,17 @@ def v1_oversight(cfg):
 
     What a reviewer needs to decide: what is held, why (risk), until when, and
     the action's arguments, each bounded. Read from the local Ephor whether or
-    not it is exposed through the gateway.
+    not it is exposed through the gateway. Without an enabled Ephor there is
+    nothing to hold: an empty, current view that says so, never a stale one.
     """
-    status, data = internal_json(
-        cfg, "ephor", "POST", "/oversight/list", {"status": "pending", "limit": 100})
-    stale = status != 200 or not isinstance(data, dict)
+    enabled = cfg.ephor_state == "enabled"
+    status, data = None, None
+    if enabled:
+        status, data = internal_json(
+            cfg, "ephor", "POST", "/oversight/list", {"status": "pending", "limit": 100})
+    stale = enabled and (status != 200 or not isinstance(data, dict))
     items = []
-    if not stale:
+    if enabled and not stale:
         for held in (data.get("items") or [])[:100]:
             if not isinstance(held, dict):
                 continue
@@ -652,9 +671,12 @@ def v1_oversight(cfg):
         "schema": "rebekah.oversight.v1",
         "observed_at": _iso_now(),
         # The gateway builds this envelope, like every /api/v1 view (Dash
-        # checks it); the holds themselves come from the local Ephor.
+        # checks it); the holds themselves come from the local Ephor, when
+        # there is one (it is opt-in).
         "source": "rebekah-gateway",
         "origin": "ephor",
+        "enabled": enabled,
+        "ephor": cfg.ephor_state,
         "count": len(items),
         "stale": stale,
         # Whether decisions from Dash can be applied here at all.
@@ -1494,6 +1516,9 @@ def main(argv=None):
         return 2
     for name in cfg.unknown_exposed:
         sys.stderr.write("rebekah-gateway: ignoring unknown backend %r\n" % name)
+    if cfg.ephor_not_enabled:
+        sys.stderr.write("rebekah-gateway: not exposing ephor: Ephor is %s here "
+                         "(opt in with REBEKAH_EPHOR_ENABLE=1)\n" % cfg.ephor_state)
 
     auth = Authenticator(cfg)
     schemes = []

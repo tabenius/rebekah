@@ -11,8 +11,12 @@
       url = "github:tabenius/sylvae/master";
       flake = false;
     };
+    # Ephor is opt-in, and its source is private. Nix fetches every locked
+    # input, so the default is an in-repo placeholder and the baseline builds
+    # from public sources. The opt-in image overrides it with the pinned rev:
+    #   --override-input ephor-src "github:tabenius/BAZ.AI-governance/$(cat nix/ephor.rev)"
     ephor-src = {
-      url = "github:tabenius/BAZ.AI-governance";
+      url = "path:./nix/ephor-absent";
       flake = false;
     };
   };
@@ -31,13 +35,27 @@
           sylvae = pkgs.callPackage ./nix/packages/sylvae.nix {
             src = sylvae-src;
           };
-          ephor = pkgs.callPackage ./nix/packages/ephor.nix {
-            src = ephor-src;
-          };
+          ephor =
+            if builtins.pathExists "${ephor-src}/Cargo.lock" then
+              pkgs.callPackage ./nix/packages/ephor.nix { src = ephor-src; }
+            else
+              # Fails when built, not when evaluated, so `nix flake check`
+              # (which evaluates every package) passes on the baseline.
+              pkgs.runCommand "ephor-opt-in-required" { } ''
+                echo "Ephor is opt-in: build with --override-input ephor-src" \
+                  "github:tabenius/BAZ.AI-governance/<rev from nix/ephor.rev>" >&2
+                exit 1
+              '';
         in {
           inherit weftmark sylvae ephor;
           default = self.packages.${system}.image;
+          # The baseline image: no Ephor, public sources only.
           image = pkgs.callPackage ./nix/image.nix {
+            inherit weftmark sylvae;
+          };
+          # Opt-in: the same image with the Ephor bridge bundled (still off
+          # until REBEKAH_EPHOR_ENABLE=1). Needs ephor-src overridden (above).
+          image-ephor = pkgs.callPackage ./nix/image.nix {
             inherit weftmark sylvae ephor;
           };
         });
@@ -57,7 +75,9 @@
             python3 -m py_compile ${./nix/gateway.py} ${./tests/gateway-oidc.py} ${./tests/dash-push.py}
             touch $out
           '';
-          inherit (self.packages.${system}) weftmark sylvae ephor;
+          # No ephor here: `nix flake check` must pass from public sources.
+          # CI builds .#ephor and .#image-ephor in a separate, token-gated job.
+          inherit (self.packages.${system}) weftmark sylvae;
         });
 
       formatter = forAllSystems (system:
