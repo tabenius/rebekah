@@ -83,10 +83,12 @@ jobs:
           files: rebekah-image.tar.gz
 
   # The opt-in image with the Ephor bridge (off until REBEKAH_EPHOR_ENABLE=1),
-  # built like CI's ephor job from nix/ephor.rev. Its source is private, so
-  # the package must stay private: the job refuses to push to, and fails after
-  # pushing to, a package anyone can pull anonymously. A package GHCR creates
-  # on first push is private; keep it that way in the package settings.
+  # built like CI's ephor job from nix/ephor.rev. Its source is private, so it
+  # only ever goes to a package that already exists and is private. A package
+  # a workflow creates on first push is linked to this (public) repository and
+  # comes out *public* (that happened once, 2026-09-26), so the job never
+  # creates it: the package is set private by hand in its settings once, and
+  # every later push checks it still is.
   # Without EPHOR_READ_TOKEN (a fork, a public mirror) the job skips itself.
   publish-ephor:
     runs-on: ubuntu-latest
@@ -133,22 +135,28 @@ jobs:
           SHA_TAG: ${{ steps.ref.outputs.sha }}
         run: |
           set -eu
-          # Anonymous pull access = a public package. GHCR hands anyone a pull
-          # token for a public repository and refuses one for a private (or
-          # not yet existing) one.
-          public() {
-            curl -s -o /dev/null -w '%{http_code}' \
-              "https://ghcr.io/token?scope=repository:${PKG}:pull&service=ghcr.io" | grep -qx 200
+          # What GHCR tells an anonymous client asking to pull:
+          #   200  public: anyone can pull it
+          #   401  exists and is private (authentication required)
+          #   403  does not exist; a push would create it, and public
+          # Push only on 401. Anything else, a network error included, stops.
+          anonymous() {
+            curl -s -o /dev/null -w '%{http_code}' --max-time 20 \
+              "https://ghcr.io/token?scope=repository:${PKG}:pull&service=ghcr.io" || true
           }
-          if public; then
-            echo "::error::${IMAGE} is public; refusing to push the Ephor image. Make the package private first."
-            exit 1
-          fi
+          state="$(anonymous)"
+          case "$state" in
+            401) ;;
+            200) echo "::error::${IMAGE} is public; refusing to push the Ephor image. Make the package private first."; exit 1 ;;
+            403) echo "::error::${IMAGE} does not exist; a first push from a workflow creates it public. Create it and set it private first (see the comment on this job)."; exit 1 ;;
+            *)   echo "::error::Could not confirm ${IMAGE} is private (GHCR answered '${state}'); not pushing."; exit 1 ;;
+          esac
           skopeo login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
           skopeo copy "docker-archive:$(readlink -f result)" "docker://${IMAGE}:${PRIMARY}"
           skopeo copy "docker://${IMAGE}:${PRIMARY}" "docker://${IMAGE}:${SHA_TAG}"
-          if public; then
-            echo "::error::${IMAGE} is publicly pullable; make the package private now."
+          state="$(anonymous)"
+          if [ "$state" != 401 ]; then
+            echo "::error::${IMAGE} is no longer private after the push (GHCR answered '${state}'); make it private now."
             exit 1
           fi
           digest="$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE}:${SHA_TAG}")"
