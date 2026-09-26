@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import socket
+import socketserver
 import subprocess
 import sys
 import threading
@@ -155,6 +156,47 @@ class WeftMarkControl(Kanban):
         self.wfile.write(out)
 
 
+GATE_TOKEN = "gate-oversight-token-0123456789"
+
+
+class Gate(socketserver.StreamRequestHandler):
+    """A tiny agent-proxy reviewer endpoint: line JSON-RPC, token in params."""
+    holds = {}
+    calls = []
+
+    def handle(self):
+        request = json.loads(self.rfile.readline())
+        params = request.get("params") or {}
+        Gate.calls.append((request["method"], params))
+        rid, method = params.get("request_id"), request["method"]
+        if params.get("token") != GATE_TOKEN:
+            reply = {"error": {"code": -32010, "message": "unauthorized"}}
+        elif method == "oversight.list":
+            reply = {"result": {"actions": list(Gate.holds.values())}}
+        elif rid not in Gate.holds:
+            reply = {"error": {"code": -32602, "message": "invalid oversight request"}}
+        elif method == "oversight.fetch":
+            reply = {"result": {"action": Gate.holds[rid]}}
+        elif method == "oversight.decide":
+            Gate.holds[rid].update(status={"approve": "approved", "deny": "denied"}[params["decision"]],
+                                   reviewer=params["reviewer"])
+            reply = {"result": {"action": Gate.holds[rid]}}
+        else:
+            reply = {"error": {"code": -32601, "message": "method not found"}}
+        reply.update(jsonrpc="2.0", id=request.get("id"))
+        self.wfile.write((json.dumps(reply) + "\n").encode())
+
+
+def gate_hold(rid, action="weft_handoff_create"):
+    """A held tools/call as agent-proxy lists it."""
+    return {"request_id": rid, "action": action, "status": "pending",
+            "arguments": {"change_set_id": "cs-1", "to": "reviewer"},
+            "evidence": {"session_id": "s", "agent_class": "OpenCodeAgent", "entry_id": "e-9",
+                         "policy": {"allowed": True, "requires_approval": True, "risk_level": "high",
+                                    "violations": [{"rule_id": "REBEKAH-HOLD-HANDOFF"}]}},
+            "created_unix_ms": 1, "deadline_unix_ms": int(time.time() * 1000) + 600000}
+
+
 def hold(rid="11111111-2222-4333-8444-555555555555", deadline_ms=None):
     return {"request_id": rid, "session_id": "s", "agent_class": "CodingAgent",
             "action": "repo.push", "arguments": ["branch=main", "force=true"],
@@ -164,6 +206,9 @@ def hold(rid="11111111-2222-4333-8444-555555555555", deadline_ms=None):
 
 
 ephor_srv = serve(Ephor)
+gate_srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Gate)
+threading.Thread(target=gate_srv.serve_forever, daemon=True).start()
+GATE_PORT = gate_srv.server_address[1]
 EPHOR_PORT = ephor_srv.server_address[1]
 kanban_srv = serve(Kanban)
 dash_srv = serve(Dash)
@@ -375,6 +420,55 @@ class DecisionsTest(unittest.TestCase):
                 self.assertEqual(Ephor.calls, [])
                 self.assertEqual(Ephor.holds["h1"]["status"], "pending")
                 del Dash.reply[("POST", "/api/connector/push")]
+
+    def test_mcp_gate_holds_are_listed_and_decided_where_they_are_held(self):
+        # Ephor's MCP gate holds an agent's tool call; the bridge holds another.
+        Ephor.holds = {"h1": hold("h1")}
+        Gate.holds = {"g1": gate_hold("g1")}
+        Gate.calls.clear()
+        pusher = self.make_pusher(REBEKAH_EPHOR_STATE="enabled",
+                                  REBEKAH_MCP_GATES="weftmark=127.0.0.1:%d" % GATE_PORT,
+                                  REBEKAH_MCP_GATE_OVERSIGHT_TOKEN=GATE_TOKEN)
+        pusher.step()
+        view = Dash.requests[-1]["body"]["views"]["oversight"]
+        self.assertFalse(view["stale"])
+        by_id = {i["request_id"]: i for i in view["items"]}
+        self.assertEqual(by_id["h1"]["source"], "bridge")
+        gated = by_id["g1"]
+        self.assertEqual((gated["source"], gated["action"], gated["risk_level"], gated["entry_id"]),
+                         ("mcp:weftmark", "weft_handoff_create", "high", "e-9"))
+        self.assertEqual(gated["arguments"], ["change_set_id=cs-1", "to=reviewer"])
+        self.assertEqual(gated["risk_flags"], ["REBEKAH-HOLD-HANDOFF"])
+        self.assertEqual(gated["agent_class"], "OpenCodeAgent")
+
+        self.give({"id": "cmd-2000001", "kind": "oversight.decide", "requested_by": "ada@example.com",
+                   "params": {"request_id": "g1", "decision": "approved", "rationale": "Handoff is fine."}})
+        self.clock.t += 30
+        pusher.step()
+        self.assertEqual(self.results()[-1], [{"id": "cmd-2000001", "ok": True, "outcome": "approved"}])
+        decide = [p for m, p in Gate.calls if m == "oversight.decide"]
+        self.assertEqual(len(decide), 1)
+        self.assertEqual((decide[0]["decision"], decide[0]["reviewer"]), ("approve", "ada@example.com"))
+        self.assertEqual([c for c in Ephor.calls if c[0] == "/oversight/decide"], [], "not the bridge's")
+        self.assertFalse(any(GATE_TOKEN in m for m in self.logs))
+
+    def test_a_gate_that_is_down_makes_the_view_stale_not_empty(self):
+        Ephor.holds = {"h1": hold("h1")}
+        pusher = self.make_pusher(REBEKAH_EPHOR_STATE="enabled",
+                                  REBEKAH_MCP_GATES="weftmark=127.0.0.1:%d" % CLOSED_PORT,
+                                  REBEKAH_MCP_GATE_OVERSIGHT_TOKEN=GATE_TOKEN)
+        pusher.step()
+        view = Dash.requests[-1]["body"]["views"]["oversight"]
+        self.assertTrue(view["stale"])
+        self.assertEqual([i["request_id"] for i in view["items"]], ["h1"], "what can be seen still is")
+
+    def test_gates_are_only_ever_loopback_and_only_with_ephor(self):
+        cfg = config(REBEKAH_EPHOR_STATE="enabled",
+                     REBEKAH_MCP_GATES="a=10.0.0.5:9102 b=127.0.0.1:9104 Bad=127.0.0.1:1 c=127.0.0.1:x",
+                     REBEKAH_MCP_GATE_OVERSIGHT_TOKEN=GATE_TOKEN)
+        self.assertEqual(cfg.mcp_gates, {"b": ("127.0.0.1", 9104)})
+        off = config(REBEKAH_MCP_GATES="b=127.0.0.1:9104", REBEKAH_MCP_GATE_OVERSIGHT_TOKEN=GATE_TOKEN)
+        self.assertEqual((off.mcp_gates, off.mcp_gate_token), ({}, ""))
 
     def test_an_approval_is_applied_with_the_reviewer_token_and_reported(self):
         Ephor.holds = {"h1": hold("h1")}

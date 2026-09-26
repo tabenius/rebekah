@@ -1,4 +1,9 @@
-{ lib, python3Packages, makeWrapper, git, src }:
+{ lib, python3Packages, makeWrapper, git, src, callPackage }:
+
+let
+  # WeftMark's MCP server (weftmark-mcp) needs the MCP SDK 2.x; see mcp2.nix.
+  mcp = callPackage ./mcp2.nix { inherit python3Packages; };
+in
 
 python3Packages.buildPythonApplication {
   pname = "weftmark";
@@ -7,21 +12,18 @@ python3Packages.buildPythonApplication {
   inherit src;
 
   build-system = [ python3Packages.setuptools ];
-  dependencies = [ python3Packages.pyyaml ];
+  dependencies = [ python3Packages.pyyaml mcp ];
   nativeBuildInputs = [ makeWrapper ];
   # textual (>=8,<9) backs WeftMark's optional TUI surface and is available in
-  # nixpkgs, so its tests run. The optional MCP surface needs mcp>=2 (it imports
-  # mcp.Client); nixpkgs only ships mcp 1.29, which lacks that API. Rebekah does
-  # not build or ship the MCP surface (it wraps weftmark-http and the CLI only),
-  # so tests/mcp is scoped out rather than run against an incompatible mcp.
+  # nixpkgs, so its tests run. The MCP surface (weftmark-mcp) is shipped for
+  # Ephor's agent-proxy to put in front of OpenCode, so tests/mcp runs too.
   nativeCheckInputs = [
     git
     python3Packages.pytestCheckHook
     python3Packages.textual
   ];
-  disabledTestPaths = [ "tests/mcp" ];
 
-  pythonImportsCheck = [ "weftmark" "weftmark.http.server" ];
+  pythonImportsCheck = [ "weftmark" "weftmark.http.server" "weftmark.mcp.server" ];
 
   postInstall = ''
     makeWrapper ${python3Packages.python.interpreter} $out/bin/weftmark-http \

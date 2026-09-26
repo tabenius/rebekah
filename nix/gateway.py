@@ -41,6 +41,7 @@ import os
 import posixpath
 import re
 import secrets
+import socket
 import sqlite3
 import ssl
 import sys
@@ -62,6 +63,8 @@ HOP_BY_HOP = {
 
 # Where the opt-in Ephor integration stands (entrypoint.sh ephor_state).
 EPHOR_STATES = ("absent", "disabled", "external", "enabled")
+# Ephor's MCP gates (agent-proxy in front of a service's MCP tools), by name.
+GATE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 
 def _split_hostport(value, default_port):
@@ -151,6 +154,18 @@ class Config:
         self.ephor_oversight_token = (
             env.get("EPHOR_OVERSIGHT_TOKEN", "").strip()
             if self.ephor_state == "enabled" else "")
+        # Ephor's MCP gates hold agents' tool calls too; the supervisor names
+        # each one's reviewer endpoint ("weftmark=127.0.0.1:9102 ..."), always
+        # loopback, and gives the gateway their shared reviewer token.
+        self.mcp_gates = {}
+        if self.ephor_state == "enabled":
+            for item in env.get("REBEKAH_MCP_GATES", "").split():
+                name, _, hostport = item.partition("=")
+                host, _, port = hostport.rpartition(":")
+                if GATE_NAME_RE.match(name) and host in LOOPBACK and port.isdigit():
+                    self.mcp_gates[name] = (host, int(port))
+        self.mcp_gate_token = (
+            env.get("REBEKAH_MCP_GATE_OVERSIGHT_TOKEN", "").strip() if self.mcp_gates else "")
         self.weftmark_write_token = env.get("REBEKAH_WEFTMARK_WRITE_TOKEN", "").strip()
         self.unknown_exposed = [
             name for name in exposed if name not in catalogue and name != "ephor"]
@@ -634,6 +649,62 @@ def _iso_ms(ms):
         return None
 
 
+def gate_rpc(cfg, name, method, params=None):
+    """One JSON-RPC call to an MCP gate's reviewer endpoint.
+
+    Returns the parsed reply (with "result" or "error"), or None when the gate
+    is unknown or unreachable. The token travels in params, as agent-proxy
+    expects; it is never logged.
+    """
+    gate = cfg.mcp_gates.get(name)
+    if gate is None or not cfg.mcp_gate_token:
+        return None
+    body = dict(params or {})
+    body["token"] = cfg.mcp_gate_token
+    line = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": body},
+                      separators=(",", ":")) + "\n"
+    try:
+        with socket.create_connection(gate, timeout=min(cfg.timeout, 10)) as conn:
+            conn.sendall(line.encode())
+            raw = conn.makefile("rb").readline(1024 * 1024 + 1)
+        reply = json.loads(raw) if len(raw) <= 1024 * 1024 else None
+    except (OSError, ValueError):
+        return None
+    return reply if isinstance(reply, dict) else None
+
+
+def _argument_strings(arguments):
+    """A held call's arguments as the key=value strings Ephor's bridge uses."""
+    if isinstance(arguments, dict):
+        return ["%s=%s" % (k, v if isinstance(v, str) else json.dumps(v, sort_keys=True))
+                for k, v in sorted(arguments.items())]
+    if isinstance(arguments, list):
+        return arguments
+    return [] if arguments is None else [arguments]
+
+
+def _hold_item(held, source, deadline_ms, evidence=None):
+    evidence = evidence if isinstance(evidence, dict) else {}
+    policy = evidence.get("policy") if isinstance(evidence.get("policy"), dict) else {}
+    flags = held.get("risk_flags")
+    if flags is None:
+        flags = [v.get("rule_id") for v in (policy.get("violations") or []) if isinstance(v, dict)]
+    return {
+        "request_id": _text(held.get("request_id"), 80),
+        "status": _text(held.get("status"), 40),
+        "agent_class": _text(held.get("agent_class") or evidence.get("agent_class"), 80),
+        "action": _text(held.get("action"), 200),
+        "arguments": [_text(arg, 200) for arg in _argument_strings(held.get("arguments"))[:10]],
+        "risk_level": _text(held.get("risk_level") or policy.get("risk_level"), 40),
+        "risk_flags": [_text(flag, 80) for flag in (flags or [])[:10]],
+        "deadline": _iso_ms(deadline_ms),
+        "entry_id": _text(held.get("entry_id") or evidence.get("entry_id"), 80),
+        # Which Ephor surface holds it: the bridge, or the MCP gate in front of
+        # a service's tools ("mcp:weftmark"). Decisions go back to the same one.
+        "source": source,
+    }
+
+
 def v1_oversight(cfg):
     """Actions Ephor holds for a human decision (pending only).
 
@@ -643,30 +714,28 @@ def v1_oversight(cfg):
     nothing to hold: an empty, current view that says so, never a stale one.
     """
     enabled = cfg.ephor_state == "enabled"
-    status, data = None, None
+    stale = False
+    items = []
     if enabled:
         status, data = internal_json(
             cfg, "ephor", "POST", "/oversight/list", {"status": "pending", "limit": 100})
-    stale = enabled and (status != 200 or not isinstance(data, dict))
-    items = []
-    if enabled and not stale:
-        for held in (data.get("items") or [])[:100]:
-            if not isinstance(held, dict):
+        if status == 200 and isinstance(data, dict):
+            for held in (data.get("items") or [])[:100]:
+                if isinstance(held, dict):
+                    items.append(_hold_item(held, "bridge", held.get("deadline_ms")))
+        else:
+            stale = True
+        for name in sorted(cfg.mcp_gates):
+            reply = gate_rpc(cfg, name, "oversight.list")
+            actions = ((reply or {}).get("result") or {}).get("actions")
+            if not isinstance(actions, list):
+                stale = True  # one surface down: what it holds is unknown
                 continue
-            arguments = held.get("arguments")
-            if not isinstance(arguments, list):
-                arguments = [] if arguments is None else [arguments]
-            items.append({
-                "request_id": _text(held.get("request_id"), 80),
-                "status": _text(held.get("status"), 40),
-                "agent_class": _text(held.get("agent_class"), 80),
-                "action": _text(held.get("action"), 200),
-                "arguments": [_text(arg, 200) for arg in arguments[:10]],
-                "risk_level": _text(held.get("risk_level"), 40),
-                "risk_flags": [_text(flag, 80) for flag in (held.get("risk_flags") or [])[:10]],
-                "deadline": _iso_ms(held.get("deadline_ms")),
-                "entry_id": _text(held.get("entry_id"), 80),
-            })
+            for held in actions[:100]:
+                if isinstance(held, dict) and held.get("status") == "pending":
+                    items.append(_hold_item(held, "mcp:" + name, held.get("deadline_unix_ms"),
+                                            held.get("evidence")))
+        items = items[:100]
     return {
         "schema": "rebekah.oversight.v1",
         "observed_at": _iso_now(),
@@ -760,11 +829,29 @@ def apply_command(cfg, command, now_ms=None):
     if not rationale:
         result["error"] = "rationale_required"
         return result
+    # Find which Ephor surface holds it: the bridge, or one of the MCP gates.
     status, data = internal_json(
         cfg, "ephor", "GET", "/oversight/fetch/%s" % urllib.parse.quote(request_id, safe=""))
     held = (data or {}).get("action") if status == 200 and isinstance(data, dict) else None
+    gate = None
+    unreachable = status is None
+    deadline = held.get("deadline_ms") if isinstance(held, dict) else None
     if not isinstance(held, dict):
-        result["error"] = "hold_not_found" if status == 404 else "ephor_unreachable"
+        # Look it up in each gate's list: asking a gate for a hold it does not
+        # have is logged there as a rejected request.
+        for name in sorted(cfg.mcp_gates):
+            reply = gate_rpc(cfg, name, "oversight.list")
+            actions = ((reply or {}).get("result") or {}).get("actions")
+            if not isinstance(actions, list):
+                unreachable = True
+                continue
+            action = next((a for a in actions if isinstance(a, dict)
+                           and a.get("request_id") == request_id), None)
+            if action is not None:
+                held, gate, deadline = action, name, action.get("deadline_unix_ms")
+                break
+    if not isinstance(held, dict):
+        result["error"] = "ephor_unreachable" if unreachable else "hold_not_found"
         return result
     if held.get("status") != "pending":
         result.update(error="not_pending", outcome=_text(held.get("status"), 40))
@@ -775,7 +862,6 @@ def apply_command(cfg, command, now_ms=None):
         if decision not in ("approved", "denied"):
             result["error"] = "bad_decision"
             return result
-        deadline = held.get("deadline_ms")
         if decision == "approved" and isinstance(deadline, int) and now_ms > deadline:
             # Past its deadline a hold defaults to deny; never approve it late.
             result["error"] = "deadline_passed"
@@ -799,6 +885,22 @@ def apply_command(cfg, command, now_ms=None):
         path = "/oversight/escalate"
         body = {"request_id": request_id, "target_queue": queue,
                 "rationale": "%s (escalated by %s)" % (rationale, actor)}
+
+    if gate is not None:
+        # agent-proxy's reviewer RPC: the same verbs, approve/deny spelled its way.
+        if kind == "oversight.decide":
+            body = dict(body, decision="approve" if body["decision"] == "approved" else "deny")
+        reply = gate_rpc(cfg, gate, path.replace("/oversight/", "oversight."), body)
+        action = ((reply or {}).get("result") or {}).get("action")
+        if isinstance(action, dict):
+            result.update(ok=True, outcome=_text(action.get("status"), 40))
+        elif reply is None:
+            result["error"] = "ephor_unreachable"
+        elif ((reply.get("error") or {}).get("code")) == -32010:
+            result["error"] = "ephor_refused_credential"
+        else:
+            result["error"] = "gate_refused"
+        return result
 
     status, data = internal_json(cfg, "ephor", "POST", path, body,
                                  bearer=cfg.ephor_oversight_token)

@@ -34,6 +34,14 @@ its bridge, which runs only with `REBEKAH_EPHOR_ENABLE=1`.
   closed) rather than preallocating, and records the operator's verification
   command as WeftMark evidence attributed `--producer-id opencode:session/<id>`.
   The gateway then resolves the `related.opencode` link from that producer id.
+- `nix/mcp-bridge.py` — `rebekah-mcp-bridge`: joins Ephor's agent-proxy (UID
+  10007) to a service's stdio MCP server across the UID boundary. `serve` (as the
+  service) accepts only the proxy's UID (`SO_PEERCRED`) on a Unix socket and
+  starts the server per connection; `connect` is the proxy's upstream program.
+- `nix/ephor-policy.json` — the MCP gate's default policy (`/etc/rebekah/`,
+  overridable with `REBEKAH_EPHOR_POLICY`): which tool calls wait for a person.
+- `nix/packages/mcp2.nix` — the MCP Python SDK 2.x (+ `mcp-types`, `httpx2`,
+  `httpcore2`) from pinned wheels, for `weftmark-mcp` and `sylvae mcp`.
 - `nix/gateway.py` — `rebekah-gateway`: the single authenticated entry point for
   Rebekah's API (password, token and/or OIDC auth), fronting the loopback
   backends. Also serves the built-in web console, `GET /api/info`, and the
@@ -51,7 +59,9 @@ its bridge, which runs only with `REBEKAH_EPHOR_ENABLE=1`.
   Dash (`POST /api/connector/push`, poll `GET /api/connector/pending`); it
   also applies human-in-the-loop decisions Dash queues (`apply_command`:
   Ephor holds, WeftMark reviews) and reports them (`POST /api/connector/results`).
-  `GET /api/v1/oversight` / `v1_oversight` lists pending Ephor holds.
+  `GET /api/v1/oversight` / `v1_oversight` lists pending Ephor holds from both
+  surfaces — the bridge and each MCP gate (`source`: `bridge` /
+  `mcp:<name>`) — and `apply_command` decides each where it is held.
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin).
   Goal-based nav (Work / Review / Runs / Models / System / Advanced): Work is the
   WeftMark board (five lanes on desktop, a single attention-first list with a
@@ -115,6 +125,7 @@ distinct UID/GID and no ambient privileges. All ports are loopback-only.
 | sylvae   | 10003:10003   | 8971   | `/var/lib/rebekah/sylvae`   | `/` |
 | weftmark | 10004:10004   | 8765   | `/var/lib/rebekah/weftmark` | `/healthz` |
 | ephor (opt-in) | 10006:10006 | 9800 | `/var/lib/rebekah/ephor` | `/health` |
+| MCP gate (opt-in, agent-proxy) | 10007:10007 | 9101/9103 (MCP), 9102/9104 (reviewer) | `/var/lib/rebekah/agent-proxy` | `/mcp` answers 401 |
 | gateway  | 10005:10005   | 8080   | `/var/lib/rebekah/gateway` (`0700`) | `/healthz` |
 
 The four core services bind loopback only. The **gateway** is the exception by
@@ -241,6 +252,18 @@ them in any change:
     reviewer token or a gateway backend. Asking for governance without it
     still fails closed. Guarded by `tests/smoke.sh` (baseline and
     `REBEKAH_SMOKE_EPHOR=1`), `tests/gateway.sh` and `tests/dash-push.py`.
+
+13. **Ephor's MCP gate cannot be routed around or talked into approving
+    itself.** With Ephor enabled, OpenCode gets WeftMark's and Sylvae's MCP
+    tools only through agent-proxy (`OPENCODE_CONFIG_CONTENT`, a per-boot
+    bearer token). The proxies run as 10007 and alone (with the gateway) hold
+    the gate's reviewer token; the MCP servers run as their own service behind
+    `rebekah-mcp-bridge`, which admits only UID 10007, so nothing an agent can
+    drive shares a UID with that token. WeftMark's `evidence-exec` capability
+    (arbitrary commands as WeftMark) is never exposed. Guarded by
+    `tests/smoke.sh` with `REBEKAH_SMOKE_EPHOR=1` (a held call, the bridge
+    refusing OpenCode, the proxy's environment unreadable to OpenCode) and
+    `tests/mcp-bridge.sh`.
 
 ## Conventions
 

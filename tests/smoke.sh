@@ -228,6 +228,49 @@ for _ in $(seq 1 90); do
       jq -e --arg state "$([[ "$smoke_ephor" == 1 ]] && echo enabled || echo absent)" \
         '.ephor.state == $state and .ephor.optional == true' >/dev/null
 
+    if [[ "$smoke_ephor" == 1 ]]; then
+      # Ephor's MCP gate, from OpenCode's side (UID 10002): its injected config
+      # names the gate, a held tool call waits (-32002) and shows up for review
+      # as mcp:weftmark, and neither the bridge socket behind the gate nor the
+      # gate's reviewer token is within reach.
+      gate_reply="$("$runtime" exec --user 10002:10002 "$name" bash -c '
+        for p in /proc/[0-9]*; do
+          [ "${p#/proc/}" = "$$" ] && continue
+          case "$(tr "\0" " " < "$p/cmdline" 2>/dev/null)" in
+            *"opencode serve"*) cfg="$(tr "\0" "\n" < "$p/environ" | grep "^OPENCODE_CONFIG_CONTENT=" | cut -d= -f2-)" ;;
+          esac
+        done
+        auth="$(jq -r .mcp.weftmark.headers.Authorization <<<"$cfg")"
+        url="$(jq -r .mcp.weftmark.url <<<"$cfg")"
+        post() { curl -s --max-time 10 -X POST "$url" -H "Authorization: $auth" \
+          -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" --data "$1"; }
+        post "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"smoke\",\"version\":\"0\"}}}" >/dev/null
+        post "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"weft_handoff_create\",\"arguments\":{\"change_set_id\":\"smoke-change-set\"}}}"')"
+      if ! jq -e '.error.code == -32002 and ._kagp.oversight_request_id != null' >/dev/null <<<"$gate_reply"; then
+        printf 'failed: the MCP gate did not hold weft_handoff_create: %s\n' "$gate_reply" >&2
+        exit 1
+      fi
+      "$runtime" exec "$name" curl -sf --max-time 10 -H "Authorization: Bearer $gw_token" \
+        http://127.0.0.1:8080/api/v1/oversight |
+        jq -e '.stale == false and any(.items[]; .source == "mcp:weftmark" and .action == "weft_handoff_create")' >/dev/null
+      if [[ -n "$("$runtime" exec --user 10002:10002 "$name" bash -c \
+        'echo "{}" | timeout 5 rebekah-mcp-bridge connect /run/rebekah/mcp/weftmark/mcp.sock' 2>/dev/null)" ]]; then
+        printf 'failed: OpenCode reached the WeftMark MCP server around the gate\n' >&2
+        exit 1
+      fi
+      if "$runtime" exec --user 10002:10002 "$name" bash -c '
+        for p in /proc/[0-9]*; do
+          [ "${p#/proc/}" = "$$" ] && continue
+          case "$(tr "\0" " " < "$p/cmdline" 2>/dev/null)" in
+            agent-proxy*) cat "$p/environ" >/dev/null 2>&1 && exit 0 ;;
+          esac
+        done
+        exit 1'; then
+        printf 'failed: OpenCode can read the MCP gate reviewer token\n' >&2
+        exit 1
+      fi
+    fi
+
     # Restart on the same state: the entrypoint must set up state directories
     # the service UIDs already own, still without CAP_FOWNER.
     "$runtime" restart -t 30 "$name" >/dev/null
@@ -261,7 +304,7 @@ for _ in $(seq 1 90); do
     fi
 
     if [[ "$smoke_ephor" == 1 ]]; then
-      printf 'ok: Ephor opted in: governed WeftMark evidence passes and held actions are reviewable\n'
+      printf 'ok: Ephor opted in: governed WeftMark evidence passes, the MCP gate holds an agent tool call for review, and nothing routes around it\n'
     else
       printf 'ok: Ephor absent: nothing fails, and asking for governance fails closed\n'
     fi

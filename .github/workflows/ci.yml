@@ -31,6 +31,8 @@ jobs:
           bash tests/gateway.sh
       - name: Test the Dash push client
         run: python3 tests/dash-push.py
+      - name: Test the MCP bridge
+        run: bash tests/mcp-bridge.sh
       - name: Build image
         run: nix build .#image --print-build-logs
       - name: Load image

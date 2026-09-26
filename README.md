@@ -374,6 +374,25 @@ lets RAGBAZ Dash decide held actions. Evaluate a Change Set against it:
 docker exec -e REBEKAH_CHANGE_SET_ID=cs-example <container> rebekah-govern
 ```
 
+### Held agent tool calls (the MCP gate)
+
+With Ephor enabled, OpenCode's agents reach WeftMark's and Sylvae's MCP tools
+only through Ephor's `agent-proxy`. Every tool call is checked against
+`/etc/rebekah/ephor-policy.json` (set `REBEKAH_EPHOR_POLICY` to use another)
+and recorded in Ephor's audit chain:
+
+- allowed calls run at once (reads, claims, releases);
+- held calls (by default `weft_handoff_create` and `sylvae_run_skill`) return
+  "held for human approval" to the agent, appear in `GET /api/v1/oversight`
+  and RAGBAZ Dash as `source: "mcp:weftmark"` / `"mcp:sylvae"`, and run only
+  once a reviewer approves them; a hold not decided within
+  `REBEKAH_EPHOR_HOLD_SLA_MS` (default 15 minutes) is denied;
+- denied calls return an error to the agent.
+
+The gate covers MCP tools only. OpenCode's built-in tools (shell, file edits)
+do not pass through it. WeftMark's `evidence-exec` MCP capability is never
+exposed, because it runs arbitrary commands as WeftMark itself.
+
 To use an external KAGP deployment instead, leave `REBEKAH_EPHOR_ENABLE` at `0`
 and set `EPHOR_URL`; `rebekah-ephor` then evaluates against it (held-action
 review stays with that deployment). Add `ephor` to `REBEKAH_GATEWAY_EXPOSE` only

@@ -32,6 +32,7 @@ dockerTools.buildLayeredImage {
       var/lib/rebekah/sylvae/skills \
       var/lib/rebekah/weftmark \
       var/lib/rebekah/ephor \
+      var/lib/rebekah/agent-proxy \
       var/lib/rebekah/gateway \
       workspace
 
@@ -48,6 +49,7 @@ dockerTools.buildLayeredImage {
       'weftmark:x:10004:10004:WeftMark service:/var/lib/rebekah/weftmark:/sbin/nologin' \
       'gateway:x:10005:10005:Rebekah API gateway:/var/lib/rebekah:/sbin/nologin' \
       'ephor:x:10006:10006:Ephor governance service:/var/lib/rebekah/ephor:/sbin/nologin' \
+      'agent-proxy:x:10007:10007:Ephor MCP gate:/var/lib/rebekah/agent-proxy:/sbin/nologin' \
       > etc/passwd
     printf '%s\n' \
       'root:x:0:' \
@@ -58,6 +60,7 @@ dockerTools.buildLayeredImage {
       'weftmark:x:10004:' \
       'gateway:x:10005:' \
       'ephor:x:10006:' \
+      'agent-proxy:x:10007:' \
       > etc/group
 
     chmod 0750 var/lib/rebekah/*
@@ -78,6 +81,17 @@ dockerTools.buildLayeredImage {
       'exec ${gatewayPython}/bin/python3 /usr/local/lib/rebekah/gateway.py "$@"' \
       > usr/local/bin/rebekah-gateway
     chmod 0555 usr/local/bin/rebekah-gateway
+
+    # Ephor's MCP gate (opt-in): the bridge that lets agent-proxy (UID 10007)
+    # reach WeftMark's and Sylvae's stdio MCP servers, which run as their own
+    # service, and the default policy for which tool calls wait for a person.
+    install -m 0555 ${./mcp-bridge.py} usr/local/lib/rebekah/mcp-bridge.py
+    printf '%s\n' \
+      '#!${bash}/bin/bash' \
+      'exec ${python3}/bin/python3 /usr/local/lib/rebekah/mcp-bridge.py "$@"' \
+      > usr/local/bin/rebekah-mcp-bridge
+    chmod 0555 usr/local/bin/rebekah-mcp-bridge
+    install -m 0444 ${./ephor-policy.json} etc/rebekah/ephor-policy.json
 
     # The gateway's built-in web console (static, served same-origin).
     mkdir -p usr/local/share/rebekah
