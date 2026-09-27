@@ -528,6 +528,17 @@ if grep -q '"opencode:session/live-9"' "$csd" && grep -qE '"active": *true' "$cs
 else
   fail "cs detail did not resolve the active-claim link: $(cat "$csd")"
 fi
+# Each resolved ref carries the WeftMark provenance the console renders inline:
+# the evidence entry id for an evidence-derived link (ev-1 for the Sylvae run,
+# ev-2 for the OpenCode session), the claim id for an active-claim link
+# (claim-1). The change-set detail dialog reads these keys to show "via evidence
+# <id>" / "via claim <id>", so the gateway must keep emitting them.
+if grep -qE '"evidence": *"ev-1"' "$csd" && grep -qE '"evidence": *"ev-2"' "$csd" \
+   && grep -qE '"claim": *"claim-1"' "$csd"; then
+  pass "detail tags each runtime ref with its evidence/claim provenance"
+else
+  fail "cs detail dropped runtime-ref provenance keys: $(cat "$csd")"
+fi
 # cs-2 has no such producer -> the slots stay honestly unlinked.
 csd2="$work/csd2.json"; body -H "$auth_hdr" "$vbase/api/v1/change-sets/cs-2" > "$csd2"
 grep -qE '"linked": *false' "$csd2" && ! grep -q 'sylvae:run' "$csd2" \
