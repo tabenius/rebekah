@@ -3,14 +3,15 @@
     "ephor-src": {
       "flake": false,
       "locked": {
+        "lastModified": 1,
+        "narHash": "sha256-/TULOF6l23FKDLFo0EUdRFesf8FeYKrLk3HMYvNloXU=",
         "path": "./nix/ephor-absent",
         "type": "path"
       },
       "original": {
         "path": "./nix/ephor-absent",
         "type": "path"
-      },
-      "parent": []
+      }
     },
     "nixpkgs": {
       "locked": {
