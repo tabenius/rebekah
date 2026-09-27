@@ -1,4 +1,10 @@
-{ python3Packages, src }:
+{ python3Packages, src, callPackage }:
+
+let
+  # `sylvae mcp` uses the MCP SDK 2.x API (MCPServer), though Sylvae's
+  # pyproject still says mcp>=1.0; nixpkgs ships 1.x. See mcp2.nix.
+  mcp = callPackage ./mcp2.nix { inherit python3Packages; };
+in
 
 python3Packages.buildPythonApplication {
   pname = "sylvae";
@@ -21,11 +27,18 @@ import os" \
   '';
 
   build-system = [ python3Packages.hatchling ];
-  dependencies = with python3Packages; [ anthropic litellm pyyaml ];
+  # mcp backs `sylvae mcp`, which Ephor's agent-proxy puts in front of OpenCode.
+  dependencies = (with python3Packages; [ anthropic litellm pyyaml ]) ++ [ mcp ];
 
   nativeCheckInputs = [ python3Packages.pytestCheckHook ];
+  # This test starts `sys.executable hostile_server.py` through the MCP stdio
+  # client, which passes the child only an allow-list of variables, not
+  # PYTHONPATH: inside the Nix build the bare interpreter then cannot import
+  # mcp. The installed `sylvae` is wrapped, so the runtime is unaffected; the
+  # sibling transport test still runs the real server over stdio.
+  disabledTests = [ "test_stray_stdout_writes_do_not_corrupt_the_wire" ];
 
-  pythonImportsCheck = [ "sylvae" "sylvae.review" ];
+  pythonImportsCheck = [ "sylvae" "sylvae.review" "sylvae.mcp.server" ];
 
   meta = {
     description = "Portable skill runner across agent backends";

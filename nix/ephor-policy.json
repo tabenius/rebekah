@@ -1,0 +1,35 @@
+[
+  {
+    "rule_id": "REBEKAH-HOLD-HANDOFF",
+    "name": "Handoff needs a person",
+    "description": "An agent handing a Change Set to someone else changes who is accountable for it.",
+    "severity": 6,
+    "risk_levels": ["high"],
+    "enabled": true,
+    "conditions": [{ "field": "action", "op": "eq", "value": "weft_handoff_create" }],
+    "requires_approval": true,
+    "remediation": "A reviewer approves or denies the handoff in RAGBAZ Dash."
+  },
+  {
+    "rule_id": "REBEKAH-HOLD-SKILL-RUN",
+    "name": "Skill runs need a person",
+    "description": "A Sylvae skill run spends model capacity and writes run evidence on the agent's behalf.",
+    "severity": 5,
+    "risk_levels": ["limited"],
+    "enabled": true,
+    "conditions": [{ "field": "action", "op": "eq", "value": "sylvae_run_skill" }],
+    "requires_approval": true,
+    "remediation": "A reviewer approves or denies the run in RAGBAZ Dash."
+  },
+  {
+    "rule_id": "REBEKAH-RATE",
+    "name": "Tool call rate",
+    "description": "More than 120 governed tool calls a minute from one agent class.",
+    "severity": 4,
+    "risk_levels": ["limited"],
+    "enabled": true,
+    "conditions": [{ "field": "rate_count", "op": "gt", "value": 120 }],
+    "requires_approval": false,
+    "remediation": "Wait a minute; the agent is calling tools in a loop."
+  }
+]

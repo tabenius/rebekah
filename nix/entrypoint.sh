@@ -18,6 +18,13 @@ weftmark_host="${WEFTMARK_HOST:-127.0.0.1}"
 weftmark_port="${WEFTMARK_PORT:-8765}"
 ephor_host="${EPHOR_HOST:-127.0.0.1}"
 ephor_port="${EPHOR_PORT:-9800}"
+# Ephor's MCP gate (opt-in, with Ephor): an agent-proxy per governed MCP
+# server, each with an MCP port for OpenCode and a reviewer port for the
+# gateway, all loopback.
+mcp_gate_weftmark_port=9101
+mcp_gate_weftmark_oversight_port=9102
+mcp_gate_sylvae_port=9103
+mcp_gate_sylvae_oversight_port=9104
 # Ephor is opt-in (docs/HUMAN-INTERFACE-PLAN.md §1, §6.8): nothing in the
 # baseline suite needs it, and its absence is never a failure. Set
 # REBEKAH_EPHOR_ENABLE=1 to supervise the bundled bridge (the image-ephor
@@ -85,6 +92,17 @@ doctor() {
     failed=1
   else
     printf 'ok      ephor/%s\n' "$ephor"
+  fi
+  if [[ "$ephor" == enabled ]]; then
+    local gate_binary
+    for gate_binary in agent-proxy rebekah-mcp-bridge weftmark-mcp sylvae; do
+      if command -v "$gate_binary" >/dev/null 2>&1; then
+        printf 'ok      binary/%s\n' "$gate_binary"
+      else
+        printf 'failed  binary/%s missing (the MCP gate needs it)\n' "$gate_binary" >&2
+        failed=1
+      fi
+    done
   fi
 
   if command -v rebekah-ephor >/dev/null 2>&1; then
@@ -178,6 +196,20 @@ check_url() {
   fi
 }
 
+# An MCP gate is up when its endpoint answers and refuses an unauthenticated
+# call (401): it has no health route, and must never accept one.
+check_gate() {
+  local name="$1" port="$2" code
+  code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 2 \
+    -X POST "http://127.0.0.1:$port/mcp" || true)"
+  if [[ "$code" == 401 ]]; then
+    printf 'ok      service/mcp-gate-%s\n' "$name"
+  else
+    printf 'failed  service/mcp-gate-%s http=%s\n' "$name" "$code" >&2
+    return 1
+  fi
+}
+
 health() {
   local failed=0
   check_url ollama "http://$ollama_host/api/version" || failed=1
@@ -193,6 +225,8 @@ health() {
   check_url weftmark "http://$weftmark_host:$weftmark_port/healthz" || failed=1
   if [[ "$ephor_enable" == 1 ]]; then
     check_url ephor "http://$ephor_host:$ephor_port/health" || failed=1
+    check_gate weftmark "$mcp_gate_weftmark_port" || failed=1
+    check_gate sylvae "$mcp_gate_sylvae_port" || failed=1
   fi
   if [[ "$gateway_enable" != 0 ]]; then
     # The gateway always listens on loopback too; check it there. When TLS is
@@ -310,6 +344,86 @@ seed_ledger() {
   return 0
 }
 
+# Set by start_mcp_gate, read by serve() for OpenCode and the gateway.
+opencode_mcp_config=""
+mcp_gates=""
+mcp_gate_oversight_token=""
+
+# Ephor's MCP gate: agent-proxy in front of WeftMark's and Sylvae's MCP tools,
+# so a call the policy holds (nix/ephor-policy.json) runs only once a person
+# approves it. Three UIDs keep it honest:
+#   - each MCP server runs as its own service (WeftMark 10004, Sylvae 10003)
+#     behind rebekah-mcp-bridge, which lets in only the proxy's UID;
+#   - the proxies run as 10007 and hold the reviewer token, which nothing an
+#     agent can drive shares a UID with (a tool that runs commands could
+#     otherwise read it from /proc and approve its own hold);
+#   - OpenCode (10002) reaches the tools only through the proxies, with a
+#     per-boot MCP token.
+start_mcp_gate() {
+  local mcp_dir="$run_dir/mcp" mcp_token sock policy _
+  policy="${REBEKAH_EPHOR_POLICY:-/etc/rebekah/ephor-policy.json}"
+  mcp_token="$(head -c 36 /dev/urandom | base64 | tr -d '\n=')"
+  mcp_gate_oversight_token="$(head -c 24 /dev/urandom | base64 | tr -d '\n=')"
+
+  # Each socket lives in a directory its service owns (0711: others may reach
+  # a socket they know the name of, never list); the bridge checks the peer.
+  mkdir -p "$mcp_dir/weftmark" "$mcp_dir/sylvae"
+  chown 0:0 "$mcp_dir" "$mcp_dir/weftmark" "$mcp_dir/sylvae"
+  chmod 0711 "$mcp_dir" "$mcp_dir/weftmark" "$mcp_dir/sylvae"
+  chown 10004:10004 "$mcp_dir/weftmark"
+  chown 10003:10003 "$mcp_dir/sylvae"
+
+  # WeftMark's tools: reads, claims, releases and handoffs. Never
+  # evidence-exec, which runs arbitrary commands as WeftMark itself.
+  run_as 10004 "$state_dir/weftmark" \
+    rebekah-mcp-bridge serve "$mcp_dir/weftmark/mcp.sock" 10007 -- \
+      weftmark-mcp --repo "$workspace" --ledger "$state_dir/weftmark/ledger.jsonl" \
+        --write-capability claim --write-capability release --write-capability handoff
+  SYLVAE_OLLAMA_MODEL="$default_model" \
+    OLLAMA_API_BASE="http://127.0.0.1:11434" \
+    run_as 10003 "$state_dir/sylvae" \
+    rebekah-mcp-bridge serve "$mcp_dir/sylvae/mcp.sock" 10007 -- \
+      sylvae mcp --runs-dir "$state_dir/sylvae/runs" --skills-dir "$state_dir/sylvae/skills"
+  for sock in "$mcp_dir/weftmark/mcp.sock" "$mcp_dir/sylvae/mcp.sock"; do
+    for _ in $(seq 1 50); do
+      [[ -S "$sock" ]] && break
+      sleep 0.1
+    done
+  done
+
+  start_mcp_proxy weftmark "$mcp_gate_weftmark_port" "$mcp_gate_weftmark_oversight_port" \
+    "$mcp_dir/weftmark/mcp.sock" "$mcp_token" "$policy"
+  start_mcp_proxy sylvae "$mcp_gate_sylvae_port" "$mcp_gate_sylvae_oversight_port" \
+    "$mcp_dir/sylvae/mcp.sock" "$mcp_token" "$policy"
+
+  mcp_gates="weftmark=127.0.0.1:$mcp_gate_weftmark_oversight_port sylvae=127.0.0.1:$mcp_gate_sylvae_oversight_port"
+  opencode_mcp_config="$(jq -cn --arg auth "Bearer $mcp_token" \
+    --arg wm "http://127.0.0.1:$mcp_gate_weftmark_port/mcp" \
+    --arg sy "http://127.0.0.1:$mcp_gate_sylvae_port/mcp" '{
+      mcp: {
+        weftmark: {type: "remote", url: $wm, headers: {Authorization: $auth}, enabled: true},
+        sylvae: {type: "remote", url: $sy, headers: {Authorization: $auth}, enabled: true}
+      }
+    }')"
+}
+
+start_mcp_proxy() {
+  local name="$1" port="$2" oversight_port="$3" sock="$4" mcp_token="$5" policy="$6"
+  KAGP_MCP_HTTP_TOKEN="$mcp_token" \
+    KAGP_OVERSIGHT_TOKEN="$mcp_gate_oversight_token" \
+    KAGP_OVERSIGHT_SLA_MS="${REBEKAH_EPHOR_HOLD_SLA_MS:-900000}" \
+    run_as 10007 "$state_dir/agent-proxy" \
+    agent-proxy --mode mcp --transport http \
+      --listen "127.0.0.1:$port" \
+      --node-url "http://$ephor_host:$ephor_port" \
+      --agent-class "OpenCodeAgent" \
+      --policy-file "$policy" \
+      --upstream-program /usr/local/bin/rebekah-mcp-bridge \
+      --upstream-arg connect --upstream-arg "$sock" \
+      --oversight-listen "127.0.0.1:$oversight_port"
+  printf 'rebekah: MCP gate %s on 127.0.0.1:%s\n' "$name" "$port"
+}
+
 serve() {
   local name
   for name in "${private_env[@]}"; do
@@ -325,14 +439,15 @@ serve() {
     "$state_dir/sylvae/skills" \
     "$state_dir/weftmark" \
     "$state_dir/ephor" \
+    "$state_dir/agent-proxy" \
     "$state_dir/gateway"
   # chmod while root owns these dirs, so the mode change needs no CAP_FOWNER
   # and the container can run without it. On a restart with a persistent state
   # volume they already belong to the service UIDs, so take them back first
   # (CAP_CHOWN; the services are not running yet). chown -R then hands them out
   # again and preserves the mode.
-  chown 0:0 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor,gateway}
-  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor}
+  chown 0:0 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor,agent-proxy,gateway}
+  chmod 0750 "$state_dir"/{ollama,opencode,sylvae,weftmark,ephor,agent-proxy}
   # The gateway state holds the SQLite auth DB (password hashes + sessions):
   # tighter than the others (0700), readable only by the gateway UID.
   chmod 0700 "$state_dir/gateway"
@@ -341,6 +456,7 @@ serve() {
   chown -R 10003:10003 "$state_dir/sylvae"
   chown -R 10004:10004 "$state_dir/weftmark"
   chown -R 10006:10006 "$state_dir/ephor"
+  chown -R 10007:10007 "$state_dir/agent-proxy"
   chown -R 10005:10005 "$state_dir/gateway"
   # Seed an offline-safe OpenCode configuration once. Defining Ollama here
   # does not disable online providers; credentials added later remain available.
@@ -380,13 +496,6 @@ serve() {
 
   OLLAMA_MODELS="$state_dir/ollama/models" \
     run_as 10001 "$state_dir/ollama" ollama serve
-
-  OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" \
-    XDG_DATA_HOME="$state_dir/opencode/data" \
-    XDG_CONFIG_HOME="$state_dir/opencode/config" \
-    XDG_CACHE_HOME="$state_dir/opencode/cache" \
-    run_as 10002 "$state_dir/opencode" \
-      opencode serve --hostname "$opencode_host" --port "$opencode_port"
 
   SYLVAE_OLLAMA_MODEL="$default_model" \
     OLLAMA_API_BASE="http://127.0.0.1:11434" \
@@ -440,7 +549,23 @@ serve() {
       governance-http \
         --listen "$ephor_host:$ephor_port" \
         --node-id "${EPHOR_NODE_ID:-rebekah}"
+    start_mcp_gate
   fi
+
+  # OpenCode starts after the MCP gate, so its governed tools are there when
+  # it connects. With Ephor, OPENCODE_CONFIG_CONTENT adds them on top of the
+  # operator's config (never written into it); without, it is not set at all.
+  local -a opencode_env=()
+  if [[ -n "$opencode_mcp_config" ]]; then
+    opencode_env=("OPENCODE_CONFIG_CONTENT=$opencode_mcp_config")
+  fi
+  OPENCODE_SERVER_PASSWORD="$OPENCODE_SERVER_PASSWORD" \
+    XDG_DATA_HOME="$state_dir/opencode/data" \
+    XDG_CONFIG_HOME="$state_dir/opencode/config" \
+    XDG_CACHE_HOME="$state_dir/opencode/cache" \
+    run_as 10002 "$state_dir/opencode" \
+      env "${opencode_env[@]}" \
+      opencode serve --hostname "$opencode_host" --port "$opencode_port"
 
   # The authenticated API gateway. It fronts the loopback backends with a single
   # authenticated entry (token and/or OIDC) and is the only service meant to face
@@ -459,6 +584,8 @@ serve() {
       REBEKAH_DASH_PUSH_KEY="${REBEKAH_DASH_PUSH_KEY:-}" \
       EPHOR_OVERSIGHT_TOKEN="$oversight_token" \
       REBEKAH_EPHOR_STATE="$ephor" \
+      REBEKAH_MCP_GATES="$mcp_gates" \
+      REBEKAH_MCP_GATE_OVERSIGHT_TOKEN="$mcp_gate_oversight_token" \
       REBEKAH_WEFTMARK_WRITE_TOKEN="$weftmark_write_token" \
       run_as 10005 "$run_dir" rebekah-gateway
   fi
