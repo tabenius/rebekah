@@ -1378,7 +1378,10 @@ def make_handler(cfg, auth):
 # the same three /api/v1 payloads the gateway serves, whenever they change and
 # at least every REBEKAH_DASH_PUSH_INTERVAL seconds, and polls Dash every
 # REBEKAH_DASH_POLL_INTERVAL seconds for a "refresh requested" flag (someone
-# clicked Refresh in Dash), pushing at once when it is set. Nothing listens:
+# clicked Refresh in Dash), pushing at once when it is set. Holds have
+# deadlines: with Ephor enabled it looks for new ones every DASH_WATCH seconds
+# and pushes them at once, and it polls as often as Dash's poll_interval asks
+# (down to DASH_MIN_POLL) while a hold waits or a decision is on its way. Nothing listens:
 # no inbound port is opened. The push key is sent only in the Authorization
 # header to that one origin over verified TLS, and never logged.
 
@@ -1389,6 +1392,12 @@ DASH_TIMEOUT = 10
 MAX_COMMANDS = 20  # decisions taken from one Dash response
 MAX_REMEMBERED = 500
 DASH_MAX_BACKOFF = 900
+# Holds have deadlines, so with Ephor enabled the pusher looks at the local
+# views this often (loopback only) and pushes a new hold at once, rather than
+# at its next poll. Dash may also ask for polls as often as DASH_MIN_POLL
+# (its poll_interval) while a hold waits or a decision is on its way.
+DASH_WATCH = 5
+DASH_MIN_POLL = 5
 
 
 def dash_problems(cfg):
@@ -1428,6 +1437,8 @@ class DashPusher:
         self._prefix = url.path.rstrip("/")
         self.last_digest = None
         self.last_push = None
+        self.last_call = None  # last push or poll: Dash is called no more often than asked
+        self.poll_every = cfg.dash_poll
         self.refresh = False
         self.failures = 0
         self._state = None  # last logged state, so the log shows transitions only
@@ -1546,6 +1557,9 @@ class DashPusher:
         digest = self.digest(views)
         due = (self.refresh or digest != self.last_digest or self.last_push is None
                or now - self.last_push >= self.cfg.dash_heartbeat)
+        if not due and self.last_call is not None and now - self.last_call < self.poll_every:
+            return self._wait(now)  # nothing new to say, and not yet time to ask
+        self.last_call = now
         try:
             if due:
                 status, data, retry = self._call(
@@ -1567,6 +1581,7 @@ class DashPusher:
             return self._failed("Dash answered %s" % error)
 
         self.failures = 0
+        self.poll_every = self._poll_interval(data)
         # A decision changes what the views show: push them again at once.
         decided = self.take_commands(data)
         self.report()
@@ -1575,11 +1590,25 @@ class DashPusher:
             self.last_push = now
             self.refresh = bool((data or {}).get("refresh_requested")) or decided
             self._note("ok", "pushing to %s" % self.cfg.dash_url)
-            return 0 if decided else self.cfg.dash_poll
+            return 0 if decided else self._wait(now)
         self.refresh = bool((data or {}).get("refresh_requested")) or decided
         self._note("ok", "pushing to %s" % self.cfg.dash_url)
         # Someone asked for fresh data: push now, not at the next poll.
-        return 0 if self.refresh else self.cfg.dash_poll
+        return 0 if self.refresh else self._wait(now)
+
+    def _poll_interval(self, data):
+        """Dash's poll_interval, kept within [DASH_MIN_POLL, the configured poll]."""
+        asked = (data or {}).get("poll_interval")
+        if isinstance(asked, bool) or not isinstance(asked, int):
+            return self.cfg.dash_poll
+        return min(max(asked, DASH_MIN_POLL), self.cfg.dash_poll)
+
+    def _wait(self, now):
+        """Seconds to the next round: the next poll, or sooner to watch for holds."""
+        until_poll = max(self.poll_every - (now - (self.last_call or now)), 1)
+        if self.cfg.ephor_state == "enabled":
+            return min(DASH_WATCH, until_poll)
+        return until_poll
 
     def run(self, stop):
         delay = 1  # let the backends come up

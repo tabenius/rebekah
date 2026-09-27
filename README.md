@@ -231,7 +231,10 @@ the evidence. The two credentials this needs are minted per boot and given
 only to the gateway and to Ephor or WeftMark respectively; agents never see
 them, so an agent cannot decide its own hold. `GET /api/v1/oversight` serves
 the same view to authenticated clients. Held actions exist only when Ephor is
-opted in; otherwise the view is empty and says `"enabled": false`.
+opted in; otherwise the view is empty and says `"enabled": false`. Holds have deadlines,
+so with Ephor the gateway looks for new ones every 5 seconds and pushes them at
+once, and while one waits (or a decision is on its way) Dash asks it to check in
+every few seconds instead of every `REBEKAH_DASH_POLL_INTERVAL`.
 
 ## Correlation spine
 

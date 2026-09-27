@@ -421,6 +421,42 @@ class DecisionsTest(unittest.TestCase):
                 self.assertEqual(Ephor.holds["h1"]["status"], "pending")
                 del Dash.reply[("POST", "/api/connector/push")]
 
+    def test_a_new_hold_is_pushed_at_once_without_asking_dash_in_between(self):
+        # Holds have deadlines: with Ephor the pusher looks every few seconds
+        # (locally) and pushes a new hold straight away, not at the next poll.
+        Ephor.holds = {}
+        pusher = self.make_pusher(REBEKAH_EPHOR_STATE="enabled")
+        self.assertEqual(pusher.step(), gw.DASH_WATCH, "look again soon")
+        calls = len(Dash.requests)
+        self.clock.t += gw.DASH_WATCH
+        self.assertEqual(pusher.step(), gw.DASH_WATCH)
+        self.assertEqual(len(Dash.requests), calls, "nothing new, and no poll due: Dash is left alone")
+        Ephor.holds = {"h1": hold("h1")}
+        self.clock.t += gw.DASH_WATCH
+        pusher.step()
+        self.assertEqual(Dash.requests[-1]["path"], "/api/connector/push")
+        self.assertEqual([i["request_id"] for i in Dash.requests[-1]["body"]["views"]["oversight"]["items"]], ["h1"])
+
+    def test_dash_can_ask_for_quicker_polls_within_bounds(self):
+        pusher = self.make_pusher(REBEKAH_EPHOR_STATE="enabled")
+        for asked, expected in ((5, 5), (1, gw.DASH_MIN_POLL), (999, 30), ("5", 30), (True, 30)):
+            with self.subTest(asked=asked):
+                Dash.reply[("POST", "/api/connector/push")] = (200, {"poll_interval": asked}, {})
+                Dash.reply[("GET", "/api/connector/pending")] = (200, {"poll_interval": asked}, {})
+                pusher.refresh = True  # push now, and read the reply
+                pusher.step()
+                self.assertEqual(pusher.poll_every, expected)
+        del Dash.reply[("POST", "/api/connector/push")]
+        # At the quicker pace, a poll goes out once poll_every has passed.
+        Dash.reply[("GET", "/api/connector/pending")] = (200, {"poll_interval": 5}, {})
+        pusher.poll_every = 5
+        calls = len(Dash.requests)
+        self.clock.t += 5
+        pusher.step()
+        self.assertEqual(Dash.requests[-1]["path"], "/api/connector/pending")
+        self.assertEqual(len(Dash.requests), calls + 1)
+        del Dash.reply[("GET", "/api/connector/pending")]
+
     def test_mcp_gate_holds_are_listed_and_decided_where_they_are_held(self):
         # Ephor's MCP gate holds an agent's tool call; the bridge holds another.
         Ephor.holds = {"h1": hold("h1")}
