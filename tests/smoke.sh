@@ -6,7 +6,10 @@ set -euo pipefail
 smoke_ephor="${REBEKAH_SMOKE_EPHOR:-0}"
 if [[ "$smoke_ephor" == 1 ]]; then
   image="${REBEKAH_IMAGE:-rebekah:ephor}"
-  ephor_env=(-e REBEKAH_EPHOR_ENABLE=1)
+  # A local replica proves Litestream streams the audit chain; operators point
+  # REBEKAH_EPHOR_REPLICA_URL at S3/R2, SFTP and so on instead.
+  ephor_env=(-e REBEKAH_EPHOR_ENABLE=1
+    -e REBEKAH_EPHOR_REPLICA_URL=file:///var/lib/rebekah/ephor/replica)
 else
   image="${REBEKAH_IMAGE:-rebekah:latest}"
   ephor_env=()
@@ -287,6 +290,14 @@ for _ in $(seq 1 90); do
       fi
     fi
 
+    if [[ "$smoke_ephor" == 1 ]]; then
+      audit_events="$("$runtime" exec "$name" curl -sf --max-time 5 http://127.0.0.1:9800/health | jq -r .events)"
+      if ! [[ "$audit_events" =~ ^[0-9]+$ ]] || ((audit_events < 1)); then
+        printf 'failed: Ephor recorded no audit events (%s)\n' "$audit_events" >&2
+        exit 1
+      fi
+    fi
+
     # Restart on the same state: the entrypoint must set up state directories
     # the service UIDs already own, still without CAP_FOWNER.
     "$runtime" restart -t 30 "$name" >/dev/null
@@ -305,6 +316,21 @@ for _ in $(seq 1 90); do
       "$runtime" logs --tail 40 "$name" >&2 || true
       exit 1
     fi
+    if [[ "$smoke_ephor" == 1 ]]; then
+      # The audit chain is durable: a restart reloads (and re-verifies) it.
+      after="$("$runtime" exec "$name" curl -sf --max-time 5 http://127.0.0.1:9800/health | jq -r .events)"
+      if ! [[ "$after" =~ ^[0-9]+$ ]] || ((after < audit_events)); then
+        printf 'failed: the Ephor audit chain did not survive a restart (%s events before, %s after)\n' \
+          "$audit_events" "$after" >&2
+        exit 1
+      fi
+      # ... and Litestream streamed it to the replica.
+      if [[ -z "$("$runtime" exec "$name" find /var/lib/rebekah/ephor/replica -type f 2>/dev/null | head -1)" ]]; then
+        printf 'failed: Litestream wrote nothing to the audit replica\n' >&2
+        "$runtime" logs --tail 40 "$name" >&2 || true
+        exit 1
+      fi
+    fi
 
     # A requested stop is prompt and clean: the supervisor forwards TERM, waits
     # for its services, and exits 0 well inside the runtime's stop timeout.
@@ -320,7 +346,7 @@ for _ in $(seq 1 90); do
     fi
 
     if [[ "$smoke_ephor" == 1 ]]; then
-      printf 'ok: Ephor opted in: governed WeftMark evidence passes, the MCP gate holds an agent tool call for review, and nothing routes around it\n'
+      printf 'ok: Ephor opted in: governed WeftMark evidence passes, the MCP gate holds an agent tool call for review, nothing routes around it, and the audit chain survives a restart and streams to its replica\n'
     else
       printf 'ok: Ephor absent: nothing fails, and asking for governance fails closed\n'
     fi

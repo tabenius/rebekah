@@ -57,6 +57,7 @@
           # until REBEKAH_EPHOR_ENABLE=1). Needs ephor-src overridden (above).
           image-ephor = pkgs.callPackage ./nix/image.nix {
             inherit weftmark sylvae ephor;
+            inherit (pkgs) litestream;
           };
         });
 

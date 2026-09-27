@@ -377,6 +377,29 @@ lets RAGBAZ Dash decide held actions. Evaluate a Change Set against it:
 docker exec -e REBEKAH_CHANGE_SET_ID=cs-example <container> rebekah-govern
 ```
 
+### A durable, streamed audit chain
+
+With Ephor enabled, its audit chain (every capture, finalize and oversight
+decision, including the MCP gate's) is kept in an append-only SQLite database,
+`/var/lib/rebekah/ephor/audit.sqlite` (`REBEKAH_EPHOR_DB` to use another Ephor
+database file). Triggers refuse any update or delete and any insert that does
+not extend the hash chain, and Ephor re-verifies the whole chain when it starts:
+a restart keeps every event and pending hold, and a tampered chain refuses to
+load. See Ephor's `docs/litestream.md`.
+
+To keep a copy the host cannot rewrite, point Litestream at a replica. It
+streams every change within about a second:
+
+| Setting | Meaning |
+| --- | --- |
+| `REBEKAH_EPHOR_REPLICA_URL` | `s3://bucket/path` (AWS, R2, MinIO, B2), `sftp://user@host/path`, `webdav://…`, `nats://…`, `gs://…`, `abs://…`, `file:///path` |
+| `REBEKAH_EPHOR_REPLICA_ENDPOINT`, `REBEKAH_EPHOR_REPLICA_REGION` | for S3-compatible stores other than AWS, e.g. R2's account endpoint and `auto` |
+| `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` | storage credentials; secrets, passed to Litestream only |
+| `REBEKAH_EPHOR_LITESTREAM_CONFIG` | a full Litestream config file instead (SFTP keys and host key, age encryption, several databases) |
+
+Use an object-locked bucket (S3 Object Lock, an R2 bucket-lock rule) or an
+append-only SFTP target so the replica cannot be rewritten either.
+
 ### Held agent tool calls (the MCP gate)
 
 With Ephor enabled, OpenCode's agents reach WeftMark's and Sylvae's MCP tools

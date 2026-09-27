@@ -30,6 +30,12 @@ mcp_gate_sylvae_oversight_port=9104
 # REBEKAH_EPHOR_ENABLE=1 to supervise the bundled bridge (the image-ephor
 # build), or leave it 0 and set EPHOR_URL to use an external deployment.
 ephor_enable="${REBEKAH_EPHOR_ENABLE:-0}"
+# Ephor's audit chain is kept in this append-only SQLite database (on the state
+# volume by default; point it at another Ephor database file to share one), and
+# streamed off the host by Litestream when a replica is configured: either
+# REBEKAH_EPHOR_REPLICA_URL (s3://, sftp://, file://, nats://, webdav://, ...)
+# or a full Litestream config file in REBEKAH_EPHOR_LITESTREAM_CONFIG.
+ephor_db="${REBEKAH_EPHOR_DB:-$state_dir/ephor/audit.sqlite}"
 
 # The gateway is the single authenticated entry point for Rebekah's API
 # (invariant #2's "authenticated TLS proxy"). It binds loopback by default;
@@ -58,6 +64,8 @@ private_env=(
   REBEKAH_DASH_PUSH_KEY     # gateway
   EPHOR_OVERSIGHT_TOKEN     # ephor, gateway
   EPHOR_AUTH_TOKEN          # none: rebekah-ephor (docker exec) reads it itself
+  LITESTREAM_ACCESS_KEY_ID      # litestream (the audit chain's replica)
+  LITESTREAM_SECRET_ACCESS_KEY  # litestream
 )
 
 doctor() {
@@ -95,6 +103,14 @@ doctor() {
   fi
   if [[ "$ephor" == enabled ]]; then
     local gate_binary
+    if [[ -n "${REBEKAH_EPHOR_REPLICA_URL:-}${REBEKAH_EPHOR_LITESTREAM_CONFIG:-}" ]]; then
+      if command -v litestream >/dev/null 2>&1; then
+        printf 'ok      binary/litestream\n'
+      else
+        printf 'failed  binary/litestream missing (an audit replica is configured)\n' >&2
+        failed=1
+      fi
+    fi
     for gate_binary in agent-proxy rebekah-mcp-bridge weftmark-mcp sylvae; do
       if command -v "$gate_binary" >/dev/null 2>&1; then
         printf 'ok      binary/%s\n' "$gate_binary"
@@ -344,6 +360,35 @@ seed_ledger() {
   return 0
 }
 
+# Stream Ephor's audit chain to the configured replica with Litestream, as
+# Ephor's own UID (it reads the database and its WAL). Storage credentials
+# (LITESTREAM_ACCESS_KEY_ID/SECRET) go to Litestream alone.
+start_audit_replica() {
+  local config="${REBEKAH_EPHOR_LITESTREAM_CONFIG:-}"
+  if [[ -z "$config" && -z "${REBEKAH_EPHOR_REPLICA_URL:-}" ]]; then
+    printf 'rebekah: Ephor audit chain is not replicated (set REBEKAH_EPHOR_REPLICA_URL)\n'
+    return 0
+  fi
+  if [[ -z "$config" ]]; then
+    # JSON is YAML, so no value here needs YAML quoting.
+    config="$run_dir/litestream.yml"
+    jq -n --arg db "$ephor_db" --arg url "$REBEKAH_EPHOR_REPLICA_URL" \
+      --arg endpoint "${REBEKAH_EPHOR_REPLICA_ENDPOINT:-}" \
+      --arg region "${REBEKAH_EPHOR_REPLICA_REGION:-}" '{
+        dbs: [{path: $db, replica: ({url: $url}
+          + (if $endpoint == "" then {} else {endpoint: $endpoint} end)
+          + (if $region == "" then {} else {region: $region} end))}]
+      }' >"$config"
+    # chmod while root owns it: the supervisor has no CAP_FOWNER.
+    chmod 0400 "$config"
+    chown 10006:10006 "$config"
+  fi
+  LITESTREAM_ACCESS_KEY_ID="${LITESTREAM_ACCESS_KEY_ID:-}" \
+    LITESTREAM_SECRET_ACCESS_KEY="${LITESTREAM_SECRET_ACCESS_KEY:-}" \
+    run_as 10006 "$state_dir/ephor" litestream replicate -config "$config"
+  printf 'rebekah: Ephor audit chain streams to its replica (Litestream)\n'
+}
+
 # Set by start_mcp_gate, read by serve() for OpenCode and the gateway.
 opencode_mcp_config=""
 mcp_gates=""
@@ -516,7 +561,15 @@ serve() {
   ephor="$(ephor_state)"
   # No Ephor here, no reviewer credential: the gateway then reports oversight
   # as not enabled instead of offering decisions nothing could apply.
+  local -a ephor_store=()
   if [[ "$ephor" == enabled ]]; then
+    # An Ephor too old for --db keeps its chain in memory; say so.
+    if [[ "$(governance-http --help 2>/dev/null || true)" == *--db* ]]; then
+      mkdir -p "$(dirname "$ephor_db")"
+      ephor_store=(--db "$ephor_db")
+    else
+      printf 'rebekah: this Ephor keeps its audit chain in memory only (no --db)\n' >&2
+    fi
     oversight_token="${EPHOR_OVERSIGHT_TOKEN:-$(head -c 24 /dev/urandom | base64 | tr -d '\n=')}"
   fi
   # Only a WeftMark with the review capability accepts it; an older one would
@@ -548,7 +601,9 @@ serve() {
     EPHOR_OVERSIGHT_TOKEN="$oversight_token" run_as 10006 "$state_dir/ephor" \
       governance-http \
         --listen "$ephor_host:$ephor_port" \
-        --node-id "${EPHOR_NODE_ID:-rebekah}"
+        --node-id "${EPHOR_NODE_ID:-rebekah}" \
+        "${ephor_store[@]}"
+    start_audit_replica
     start_mcp_gate
   fi
 

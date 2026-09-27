@@ -3,7 +3,7 @@
   # Ephor is opt-in (docs/HUMAN-INTERFACE-PLAN.md §1, §6.8): the baseline image
   # is built without it, from public sources only. `.#image-ephor` passes the
   # governance-http bridge in; it still starts only with REBEKAH_EPHOR_ENABLE=1.
-, ephor ? null, lib }:
+, ephor ? null, litestream ? null, lib }:
 
 let
   # The gateway runs on its own Python with PyJWT + cryptography for OIDC JWT
@@ -18,7 +18,9 @@ dockerTools.buildLayeredImage {
   contents = [
     bash coreutils curl findutils git gnugrep jq ollama opencode procps sylvae
     tini util-linux weftmark dockerTools.caCertificates
-  ] ++ lib.optional (ephor != null) ephor;
+  ] ++ lib.optional (ephor != null) ephor
+    # Streams Ephor's SQLite audit chain off the host (opt-in, with Ephor).
+    ++ lib.optional (ephor != null && litestream != null) litestream;
 
   extraCommands = ''
     mkdir -p \

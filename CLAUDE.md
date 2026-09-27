@@ -19,7 +19,11 @@ its bridge, which runs only with `REBEKAH_EPHOR_ENABLE=1`.
 - `nix/entrypoint.sh` — supervisor: `serve` / `doctor` / `health`. Sets up state
   dirs, drops privileges per service, health-checks, forwards termination.
 - `nix/ephor-connector.sh` — `rebekah-ephor`: the governance connector (talks to
-  Ephor over loopback HTTP, emits normalized evidence, fails closed).
+  Ephor over loopback HTTP, emits normalized evidence, fails closed). Ephor
+  keeps its audit chain in `REBEKAH_EPHOR_DB` (append-only SQLite, verified on
+  start); `start_audit_replica` in the entrypoint runs Litestream (image-ephor
+  only) when `REBEKAH_EPHOR_REPLICA_URL` or `REBEKAH_EPHOR_LITESTREAM_CONFIG`
+  is set.
 - `nix/govern.sh` — `rebekah-govern`: attaches connector output to WeftMark as
   `governance` evidence and requires it for a review decision.
 - `nix/sylvae-evidence.sh` — `rebekah-sylvae-evidence`: the Sylvae↔WeftMark
