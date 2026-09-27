@@ -101,6 +101,8 @@
   .item { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
   .item .t { font-weight: 600; } .item .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+  .item .refline { margin-top: 3px; } .item .refline:first-of-type { margin-top: 2px; }
+  .item .prov { font-family: var(--mono); font-size: 10px; color: var(--muted); opacity: .8; word-break: break-all; }
   .item .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .item .meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; align-items: center; }
   .item.muted { opacity: .72; }
@@ -771,8 +773,30 @@
       const left = el("div");
       left.appendChild(el("div", "t", sys[0].toUpperCase() + sys.slice(1)));
       if (rel.linked) {
-        const ids = (rel.refs || []).map((r) => r.id).filter(Boolean);
-        left.appendChild(el("div", "id", ids.join(", ") || (rel.id || "")));
+        const refs = (rel.refs || []).filter((r) => r && r.id);
+        // Render each resolved runtime reference on its own line, with the
+        // WeftMark provenance that produced it inline underneath: the evidence
+        // entry id for a past run, or the active-claim id for a session working
+        // the change set right now. This lets an operator trace a link back to
+        // the exact evidence/claim without leaving the dialog.
+        if (refs.length) {
+          refs.forEach((r) => {
+            const rl = el("div", "refline");
+            rl.appendChild(el("div", "id", r.id));
+            let prov = null;
+            if (r.evidence) prov = "via evidence " + r.evidence;
+            else if (r.claim) prov = "via claim " + r.claim;
+            if (prov) {
+              if (r.active) prov += " · active";
+              rl.appendChild(el("div", "prov", prov));
+            } else if (r.active) {
+              rl.appendChild(el("div", "prov", "active claim"));
+            }
+            left.appendChild(rl);
+          });
+        } else {
+          left.appendChild(el("div", "id", rel.id || "linked"));
+        }
       } else {
         left.appendChild(el("div", "id", "not linked yet"));
       }
