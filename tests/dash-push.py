@@ -7,6 +7,7 @@ process. Standard library only.
 """
 
 import importlib.util
+import hashlib
 import json
 import os
 import socket
@@ -357,6 +358,7 @@ class DecisionsTest(unittest.TestCase):
     """Human-in-the-loop decisions from Dash, applied to the local Ephor/WeftMark."""
 
     def setUp(self):
+        self.audit_events = []
         Dash.requests.clear()
         Dash.reply.clear()
         Ephor.holds = {}
@@ -372,7 +374,15 @@ class DecisionsTest(unittest.TestCase):
         cfg = config(EPHOR_PORT=str(EPHOR_PORT), WEFTMARK_PORT=str(self.wm_srv.server_address[1]),
                      EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN, REBEKAH_WEFTMARK_WRITE_TOKEN=WRITE_TOKEN,
                      **extra)
+        cfg.nostoi_writer = self.capture_audit
         return gw.DashPusher(cfg, gw.Authenticator(cfg), clock=self.clock, log=self.logs.append)
+
+    def capture_audit(self, *, kind, actor, subject, body):
+        self.audit_events.append((kind, actor, subject, body))
+        digest = hashlib.sha256(json.dumps(
+            [kind, actor, subject, body], sort_keys=True
+        ).encode()).hexdigest()
+        return {"digest": digest}
 
     def give(self, *commands, where=("GET", "/api/connector/pending")):
         Dash.reply[where] = (200, {"commands": list(commands)}, {})
@@ -395,6 +405,71 @@ class DecisionsTest(unittest.TestCase):
         self.assertEqual((item["request_id"], item["action"], item["risk_level"]), ("h1", "repo.push", "high"))
         self.assertEqual(item["arguments"], ["branch=main", "force=true"])
         self.assertRegex(item["deadline"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_a_decision_records_intent_before_action_and_links_outcome(self):
+        timeline = []
+        cfg = config(EPHOR_PORT=str(EPHOR_PORT), EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN,
+                     REBEKAH_EPHOR_STATE="enabled")
+
+        def audit_writer(*, kind, actor, subject, body):
+            timeline.append(kind)
+            self.audit_events.append((kind, actor, subject, body))
+            return {"digest": hashlib.sha256(kind.encode()).hexdigest()}
+
+        cfg.nostoi_writer = audit_writer
+
+        def internal(_cfg, _name, method, _path, _body=None, **_kwargs):
+            if method == "GET":
+                return 200, {"action": hold("h-audit")}
+            timeline.append("external-action")
+            return 200, {"action": {"status": "approved"}}
+
+        command = {"id": "cmd-0000999", "kind": "oversight.decide",
+                   "requested_by": "ada@example.com",
+                   "params": {"request_id": "h-audit", "decision": "approved",
+                              "rationale": "reviewed"}}
+        old = gw.internal_json
+        gw.internal_json = internal
+        try:
+            result = gw.apply_command(cfg, command, now_ms=1_700_000_000_000)
+        finally:
+            gw.internal_json = old
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(timeline, [
+            "rebekah.decision.requested", "external-action",
+            "rebekah.decision.completed",
+        ])
+        self.assertEqual(self.audit_events[0][3]["request_id"], "h-audit")
+        self.assertNotIn("rationale", self.audit_events[0][3])
+        self.assertEqual(
+            self.audit_events[1][3]["intent_digest"],
+            hashlib.sha256(b"rebekah.decision.requested").hexdigest(),
+        )
+
+    def test_failed_intent_write_refuses_the_external_action(self):
+        cfg = config(EPHOR_PORT=str(EPHOR_PORT), EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN,
+                     REBEKAH_EPHOR_STATE="enabled")
+        cfg.nostoi_writer = lambda **_kwargs: (_ for _ in ()).throw(OSError("disk full"))
+        calls = []
+
+        def internal(_cfg, _name, method, _path, _body=None, **_kwargs):
+            calls.append(method)
+            return 200, {"action": hold("h-no-audit")}
+
+        command = {"id": "cmd-0000998", "kind": "oversight.decide",
+                   "requested_by": "ada@example.com",
+                   "params": {"request_id": "h-no-audit", "decision": "approved",
+                              "rationale": "reviewed"}}
+        old = gw.internal_json
+        gw.internal_json = internal
+        try:
+            result = gw.apply_command(cfg, command, now_ms=1_700_000_000_000)
+        finally:
+            gw.internal_json = old
+
+        self.assertEqual(result["error"], "audit_unavailable")
+        self.assertEqual(calls, ["GET"])
 
     def test_without_an_enabled_ephor_there_is_nothing_to_hold_or_decide(self):
         # Ephor is opt-in: absent, bundled but off, or external, the gateway

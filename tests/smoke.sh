@@ -63,6 +63,7 @@ for _ in $(seq 1 90); do
     # the SIGPIPE'd rebekah-doctor (exit 141) then fails the script racily.
     doctor_out="$("$runtime" exec "$name" rebekah-doctor)"
     grep -q 'correlation/change_set_id=smoke-change-set' <<<"$doctor_out"
+    grep -q 'ok      binary/nostoi' <<<"$doctor_out"
     # Out-of-box model contract: OpenCode and Sylvae share the same local
     # Ollama model. The smoke image carries no weights, so assert configuration
     # here; v-BAZ separately tests cached/pulled model provisioning.
@@ -74,6 +75,8 @@ for _ in $(seq 1 90); do
       --repo /workspace --ledger /var/lib/rebekah/weftmark/ledger.jsonl \
       changeset create smoke-change-set \
       --goal "Verify governed Rebekah integration" --scope "contract:governance"
+    "$runtime" exec "$name" nostoi verify \
+      --format weftmark-ledger-v1 /var/lib/rebekah/weftmark/ledger.jsonl
     # Governance is asked for explicitly (rebekah-govern). With Ephor enabled
     # it passes; without it the Change Set must not become ready: the
     # connector fails closed and records why.
@@ -82,6 +85,8 @@ for _ in $(seq 1 90); do
         -e EPHOR_POLICY_REVISION=smoke-v0 \
         "$name" rebekah-govern |
         jq -e '.ready == true and .evidence.evidence.state == "passed"' >/dev/null
+      "$runtime" exec "$name" nostoi verify --format ephor-audit-v1 \
+        /var/lib/rebekah/ephor/audit.sqlite
     else
       if govern_out="$("$runtime" exec "$name" rebekah-govern)"; then
         printf 'failed: rebekah-govern passed without Ephor\n' >&2

@@ -1,4 +1,4 @@
-{ python3Packages, src, callPackage }:
+{ python3Packages, src, callPackage, nostoiSrc ? null }:
 
 let
   # `sylvae mcp` uses the MCP SDK 2.x API (MCPServer), though Sylvae's
@@ -24,6 +24,9 @@ import os" \
       --replace-fail 'api_base: str = "http://localhost:11434"' 'api_base: str | None = None' \
       --replace-fail 'self.model = model' 'self.model = model or os.environ.get("SYLVAE_OLLAMA_MODEL", "ollama/qwen2.5:14b")' \
       --replace-fail 'self.api_base = api_base' 'self.api_base = api_base or os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")'
+    ${if nostoiSrc == null then "" else ''
+      cp ${nostoiSrc}/contrib/python/nostoi.py src/sylvae/nostoi_reference.py
+    ''}
   '';
 
   build-system = [ python3Packages.hatchling ];

@@ -13,6 +13,7 @@
 #   REBEKAH_PIDS_LIMIT process limit                     (default: 4096)
 #   REBEKAH_MEMORY     memory limit, e.g. 16g            (default: none)
 #   REBEKAH_ENV_FILE   extra container env (no secrets)  (default: ~/.config/rebekah/container.env)
+#   REBEKAH_RUNTIME_STATUS_DIR host snapshot directory (optional, read-only)
 #
 # Secrets are Podman secrets, passed as environment variables inside the
 # container only, so `podman inspect` does not show them. Each is used when it
@@ -52,6 +53,17 @@ args=(
 )
 if [[ -n "${REBEKAH_MEMORY:-}" ]]; then
   args+=(--memory "$REBEKAH_MEMORY")
+fi
+if [[ -n "${REBEKAH_RUNTIME_STATUS_DIR:-}" ]]; then
+  status_dir="$REBEKAH_RUNTIME_STATUS_DIR"
+  if [[ ! -d "$status_dir" || "$status_dir" == *,* ]]; then
+    printf 'rebekah-run: runtime status directory must exist and contain no comma\n' >&2
+    exit 1
+  fi
+  # Mount the directory: the producer atomically replaces status.json.
+  args+=(--mount "type=bind,src=$status_dir,dst=/run/host-status,ro")
+  args+=(--env "REBEKAH_RUNTIME_STATUS=/run/host-status/status.json")
+  args+=(--env "RAGBAZ_RUNTIME_STATUS=/run/host-status/status.json")
 fi
 if [[ -r "$env_file" ]]; then
   args+=(--env-file "$env_file")
