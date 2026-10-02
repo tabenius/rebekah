@@ -44,9 +44,11 @@ import secrets
 import socket
 import sqlite3
 import ssl
+import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -93,6 +95,12 @@ class Config:
         self.tls_key = env.get("REBEKAH_GATEWAY_TLS_KEY", "").strip()
         self.max_body = int(env.get("REBEKAH_GATEWAY_MAX_BODY", str(32 * 1024 * 1024)))
         self.timeout = float(env.get("REBEKAH_GATEWAY_TIMEOUT", "120"))
+        state_dir = env.get("REBEKAH_STATE_DIR", "/var/lib/rebekah").strip()
+        self.nostoi_bin = env.get("REBEKAH_NOSTOI_BIN", "nostoi").strip() or "nostoi"
+        self.nostoi_ledger = env.get(
+            "REBEKAH_NOSTOI_LEDGER", state_dir + "/gateway/nostoi.jsonl"
+        ).strip()
+        self.runtime_snapshot = env.get("REBEKAH_RUNTIME_STATUS", env.get("RAGBAZ_RUNTIME_STATUS", "")).strip()
 
         # Internal (token) scheme.
         self.token = env.get("REBEKAH_GATEWAY_TOKEN", "")
@@ -561,6 +569,33 @@ def auth_schemes(cfg, auth):
     return schemes
 
 
+def runtime_snapshot(path):
+    """Bounded host projection; never acquire a Podman socket in the gateway."""
+    base = {"schema": "ragbaz.runtime-status.v1", "status": "not-configured",
+            "summary": ["Host runtime inventory not configured; Minotaur state is unknown."]}
+    if not path:
+        return base
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError("oversized snapshot")
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.get("schema") != base["schema"]:
+            raise ValueError("unknown schema")
+        observed = datetime.fromisoformat(data["observed_at"].replace("Z", "+00:00"))
+        if observed.tzinfo is None or not isinstance(data.get("components"), dict):
+            raise ValueError("invalid observation")
+        lines = data.get("summary")
+        if not isinstance(lines, list) or len(lines) > 1024 or not all(isinstance(s, str) for s in lines):
+            raise ValueError("invalid summary")
+        age = (datetime.now(timezone.utc) - observed).total_seconds()
+        state = "current" if 0 <= age <= 120 else "stale" if age > 120 else "clock-skew"
+        return {**data, "status": state, "age_seconds": age}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {**base, "status": "unavailable", "summary": ["Host runtime inventory unavailable or invalid."]}
+
+
 def v1_system(cfg, auth):
     backends = {nm: {"route": "/" + nm + "/"} for nm in sorted(cfg.backends)}
     return {
@@ -571,6 +606,19 @@ def v1_system(cfg, auth):
         "auth": auth_schemes(cfg, auth),
         "ui": cfg.ui_enabled,
         "backends": backends,
+        "runtime": runtime_snapshot(cfg.runtime_snapshot),
+        "urls": {"console": "/" if cfg.ui_enabled else None,
+                 "backends": {nm: "/" + nm + "/" for nm in sorted(cfg.backends)}},
+        "workflows": {
+            "native_review": "weftmark" in cfg.backends,
+            "hitl": {"surface": "dash", "configured": cfg.dash_enabled,
+                     "governed_holds": cfg.ephor_state == "enabled"},
+            "attestation": "human-only Nostoi CLI; verify with allowed signers and pinned fingerprint",
+            "web": {"local": cfg.ui_enabled, "host_status": "live read of mounted snapshot",
+                    "dash": "outbound projection" if cfg.dash_enabled else "not-configured",
+                    "reads_logged": False, "mutation_audit": "Nostoi intent and result required",
+                    "delivery_receipt": False},
+        },
         # Ephor is optional: present where it stands, never as a failed
         # baseline service (plan §1, §6.8).
         "ephor": {"state": cfg.ephor_state, "exposed": "ephor" in cfg.backends,
@@ -776,6 +824,69 @@ def _reason(value, limit=2000):
     return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
 
 
+def _nostoi_event(cfg, *, kind, actor, subject, body):
+    """Append one bounded gateway event; any failure blocks the protected call."""
+    writer = getattr(cfg, "nostoi_writer", None)
+    if callable(writer):
+        return writer(kind=kind, actor=actor, subject=subject, body=body)
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 4096:
+        raise ValueError("gateway audit event exceeds 4096 bytes")
+    parent = os.path.dirname(cfg.nostoi_ledger) or "."
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            [cfg.nostoi_bin, "append", cfg.nostoi_ledger, "--kind", kind,
+             "--actor", actor, "--subject", subject, "--body", encoded, "--json"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError("Nostoi audit writer unavailable") from error
+    if completed.returncode != 0:
+        raise RuntimeError("Nostoi refused the audit append")
+    try:
+        report = json.loads(completed.stdout)
+    except ValueError as error:
+        raise RuntimeError("Nostoi returned an invalid append receipt") from error
+    if not isinstance(report, dict) or not isinstance(report.get("digest"), str):
+        raise RuntimeError("Nostoi returned an incomplete append receipt")
+    return report
+
+
+def _decision_intent(cfg, command, *, operation, details):
+    cid = command["id"]
+    actor = command["requested_by"]
+    return _nostoi_event(
+        cfg,
+        kind="rebekah.decision.requested",
+        actor=actor,
+        subject=cid,
+        body={"command_id": cid, "operation": operation, **details},
+    )
+
+
+def _decision_outcome(cfg, command, intent, result):
+    try:
+        _nostoi_event(
+            cfg,
+            kind="rebekah.decision.completed" if result.get("ok") else "rebekah.decision.failed",
+            actor=command["requested_by"],
+            subject=command["id"],
+            body={
+                "intent_digest": intent["digest"],
+                "ok": bool(result.get("ok")),
+                "outcome": _text(result.get("outcome"), 40) or "unknown",
+                "error": _text(result.get("error"), 80) or "",
+            },
+        )
+    except Exception:  # the prior durable intent makes the remote result unknown
+        result.update(ok=False, outcome="unknown", error="audit_outcome_unavailable")
+
+
 def apply_command(cfg, command, now_ms=None):
     """Apply one decision from Dash; returns {id, ok, outcome?, error?}."""
     cid = command.get("id") if isinstance(command, dict) else None
@@ -805,6 +916,16 @@ def apply_command(cfg, command, now_ms=None):
         changes = _reason(params.get("request_changes"))
         if changes:
             body["request_changes"] = changes
+        try:
+            intent = _decision_intent(
+                cfg, command, operation=kind,
+                details={"change_set_id": cs,
+                         "request_changes_sha256": hashlib.sha256(
+                             (changes or "").encode("utf-8")).hexdigest()},
+            )
+        except Exception:
+            result["error"] = "audit_unavailable"
+            return result
         status, data = internal_json(
             cfg, "weftmark", "POST",
             "/v0/control/changes/%s/reviews" % urllib.parse.quote(cs, safe=""),
@@ -816,6 +937,7 @@ def apply_command(cfg, command, now_ms=None):
         else:
             result["error"] = _text((data or {}).get("error"), 80) or (
                 "weftmark_unreachable" if status is None else "weftmark_http_%d" % status)
+        _decision_outcome(cfg, command, intent, result)
         return result
 
     request_id = params.get("request_id")
@@ -886,6 +1008,22 @@ def apply_command(cfg, command, now_ms=None):
         body = {"request_id": request_id, "target_queue": queue,
                 "rationale": "%s (escalated by %s)" % (rationale, actor)}
 
+    try:
+        intent = _decision_intent(
+            cfg, command, operation=kind,
+            details={
+                "request_id": request_id,
+                "decision": _text(body.get("decision"), 16) or "",
+                "rationale_sha256": hashlib.sha256(rationale.encode("utf-8")).hexdigest(),
+                "rationale_chars": len(rationale),
+                "target_queue": _text(body.get("target_queue"), 80) or "",
+                "defer_ms": body.get("defer_ms", 0),
+            },
+        )
+    except Exception:
+        result["error"] = "audit_unavailable"
+        return result
+
     if gate is not None:
         # agent-proxy's reviewer RPC: the same verbs, approve/deny spelled its way.
         if kind == "oversight.decide":
@@ -900,6 +1038,7 @@ def apply_command(cfg, command, now_ms=None):
             result["error"] = "ephor_refused_credential"
         else:
             result["error"] = "gate_refused"
+        _decision_outcome(cfg, command, intent, result)
         return result
 
     status, data = internal_json(cfg, "ephor", "POST", path, body,
@@ -911,6 +1050,7 @@ def apply_command(cfg, command, now_ms=None):
     else:
         result["error"] = _text((data or {}).get("error"), 120) or (
             "ephor_unreachable" if status is None else "ephor_http_%d" % status)
+    _decision_outcome(cfg, command, intent, result)
     return result
 
 

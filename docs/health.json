@@ -1,0 +1,33 @@
+{
+  "schema": "ragbaz.health-contract.v1",
+  "component": "rebekah",
+  "methods": [
+    {
+      "id": "gateway-liveness",
+      "transport": "http",
+      "method": "GET",
+      "path": "/healthz",
+      "expected_status": 200,
+      "expected_json": {"ok": true},
+      "authentication": "none",
+      "timeout_seconds": 2,
+      "meaning": "Gateway answers; not backend readiness or audit integrity."
+    },
+    {
+      "id": "supervised-health",
+      "transport": "argv",
+      "argv": ["rebekah-health"],
+      "namespace": "inside the Rebekah container",
+      "meaning": "Supervisor-defined enabled-service probes and audit verification; disabled/absent Ephor is not baseline failure."
+    }
+  ],
+  "packaged_repository_contracts": {
+    "weftmark": "weftmark/docs/health.json",
+    "sylvae": "sylvae/docs/health.json",
+    "nostoi": "nostoi/docs/health.json",
+    "minotaur_host_adapter": "ragbaz-minotaur/doc/health.json",
+    "opencode": {"method": "GET", "path": "/global/health", "authentication": "HTTP Basic; supervisor-owned credential", "meaning": "Upstream health contract; preserve auth."},
+    "ollama": {"method": "GET", "path": "/api/version", "meaning": "Answering/version only; no model-loaded/inference-readiness claim."},
+    "ephor_optional": {"method": "GET", "path": "/health", "meaning": "Only probe the local bridge when explicitly enabled; govern requests still fail closed without it."}
+  }
+}

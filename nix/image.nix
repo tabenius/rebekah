@@ -1,5 +1,5 @@
 { dockerTools, bash, coreutils, curl, findutils, git, gnugrep, jq, ollama
-, opencode, procps, python3, tini, util-linux, weftmark, sylvae
+, nostoi, opencode, procps, python3, tini, util-linux, weftmark, sylvae
   # Ephor is opt-in (docs/HUMAN-INTERFACE-PLAN.md §1, §6.8): the baseline image
   # is built without it, from public sources only. `.#image-ephor` passes the
   # governance-http bridge in; it still starts only with REBEKAH_EPHOR_ENABLE=1.
@@ -16,7 +16,7 @@ dockerTools.buildLayeredImage {
   tag = if ephor == null then "latest" else "ephor";
 
   contents = [
-    bash coreutils curl findutils git gnugrep jq ollama opencode procps sylvae
+    bash coreutils curl findutils git gnugrep jq nostoi ollama opencode procps sylvae
     tini util-linux weftmark dockerTools.caCertificates
   ] ++ lib.optional (ephor != null) ephor
     # Streams Ephor's SQLite audit chain off the host (opt-in, with Ephor).

@@ -4,11 +4,17 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     weftmark-src = {
-      url = "github:tabenius/WeftMark";
+      url = "github:tabenius/WeftMark/bab7fb4";
       flake = false;
     };
     sylvae-src = {
-      url = "github:tabenius/sylvae/master";
+      url = "github:tabenius/sylvae/ee9af27";
+      flake = false;
+    };
+    # Pin the public Nostoi source that ships CLI verification for all suite
+    # audit formats, including WeftMark JSONL and Ephor SQLite.
+    nostoi-src = {
+      url = "github:tabenius/nostoi/d5dd0ef87185e1213889eb505f482a860f393cfd";
       flake = false;
     };
     # Ephor is opt-in, and its source is private. Nix fetches every locked
@@ -21,7 +27,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, weftmark-src, sylvae-src, ephor-src }:
+  outputs = { self, nixpkgs, weftmark-src, sylvae-src, nostoi-src, ephor-src }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -34,6 +40,10 @@
           };
           sylvae = pkgs.callPackage ./nix/packages/sylvae.nix {
             src = sylvae-src;
+            nostoiSrc = nostoi-src;
+          };
+          nostoi = pkgs.callPackage ./nix/packages/nostoi.nix {
+            src = nostoi-src;
           };
           ephor =
             if builtins.pathExists "${ephor-src}/Cargo.lock" then
@@ -47,16 +57,16 @@
                 exit 1
               '';
         in {
-          inherit weftmark sylvae ephor;
+          inherit weftmark sylvae nostoi ephor;
           default = self.packages.${system}.image;
           # The baseline image: no Ephor, public sources only.
           image = pkgs.callPackage ./nix/image.nix {
-            inherit weftmark sylvae;
+            inherit weftmark sylvae nostoi;
           };
           # Opt-in: the same image with the Ephor bridge bundled (still off
           # until REBEKAH_EPHOR_ENABLE=1). Needs ephor-src overridden (above).
           image-ephor = pkgs.callPackage ./nix/image.nix {
-            inherit weftmark sylvae ephor;
+            inherit weftmark sylvae nostoi ephor;
             inherit (pkgs) litestream;
           };
         });
@@ -78,7 +88,7 @@
           '';
           # No ephor here: `nix flake check` must pass from public sources.
           # CI builds .#ephor and .#image-ephor in a separate, token-gated job.
-          inherit (self.packages.${system}) weftmark sylvae;
+          inherit (self.packages.${system}) weftmark sylvae nostoi;
         });
 
       formatter = forAllSystems (system:

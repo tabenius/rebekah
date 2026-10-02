@@ -71,6 +71,12 @@ private_env=(
 doctor() {
   local failed=0 service
   printf 'rebekah doctor\n'
+  if command -v nostoi >/dev/null 2>&1; then
+    printf 'ok      binary/nostoi\n'
+  else
+    printf 'failed  binary/nostoi missing\n' >&2
+    failed=1
+  fi
   for service in "${service_names[@]}"; do
     if [[ -d "$state_dir/$service" ]]; then
       printf 'ok      state/%s\n' "$service"
@@ -141,6 +147,26 @@ doctor() {
     printf 'failed  workspace requires a Git repository with a commit\n' >&2
     failed=1
   fi
+
+  local chain_path chain_format chain_label
+  for chain_label in gateway sylvae weftmark ephor; do
+    case "$chain_label" in
+      gateway) chain_path="$state_dir/gateway/nostoi.jsonl"; chain_format=nostoi-v1 ;;
+      sylvae) chain_path="$state_dir/sylvae/runs/nostoi.jsonl"; chain_format=nostoi-v1 ;;
+      weftmark) chain_path="$state_dir/weftmark/ledger.jsonl"; chain_format=weftmark-ledger-v1 ;;
+      ephor) chain_path="$ephor_db"; chain_format=ephor-audit-v1 ;;
+    esac
+    if [[ -s "$chain_path" ]]; then
+      if nostoi verify --format "$chain_format" "$chain_path" >/dev/null; then
+        printf 'ok      chain/%s\n' "$chain_label"
+      else
+        printf 'failed  chain/%s is invalid (%s)\n' "$chain_label" "$chain_path" >&2
+        failed=1
+      fi
+    else
+      printf 'pending chain/%s\n' "$chain_label"
+    fi
+  done
 
   if [[ -n "${REBEKAH_CHANGE_SET_ID:-}" ]]; then
     printf 'ok      correlation/change_set_id=%s\n' "$REBEKAH_CHANGE_SET_ID"
@@ -642,6 +668,7 @@ serve() {
       REBEKAH_MCP_GATES="$mcp_gates" \
       REBEKAH_MCP_GATE_OVERSIGHT_TOKEN="$mcp_gate_oversight_token" \
       REBEKAH_WEFTMARK_WRITE_TOKEN="$weftmark_write_token" \
+      REBEKAH_NOSTOI_LEDGER="$state_dir/gateway/nostoi.jsonl" \
       run_as 10005 "$run_dir" rebekah-gateway
   fi
 

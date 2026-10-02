@@ -873,6 +873,19 @@
       || (ephor.exposed || backends.indexOf("ephor") >= 0 ? "enabled" : "absent");
     const ephorOptional = backends.indexOf("ephor") < 0;
     tiles.textContent = "";
+    if (sys.ok && sys.data) {
+      const runtime = sys.data.runtime || { status: "not-configured", summary: [] };
+      const tile = el("div", "tile optional");
+      tile.appendChild(el("div", "name", "Host inventory / Minotaur"));
+      tile.appendChild(el("div", "sub", "Snapshot: " + runtime.status));
+      const detail = document.createElement("details");
+      detail.appendChild(el("summary", "", "Components, containers, URLs and human workflows"));
+      detail.appendChild(el("pre", "", (runtime.summary || []).join("\n")));
+      detail.appendChild(el("pre", "", JSON.stringify(sys.data.workflows || {}, null, 2)));
+      detail.appendChild(el("pre", "", JSON.stringify(sys.data.urls || {}, null, 2)));
+      tile.appendChild(detail);
+      tiles.appendChild(tile);
+    }
     if (!backends.length) {
       tiles.appendChild(el("div", "empty", "No backends exposed."));
       setSysState("ready", 0);
