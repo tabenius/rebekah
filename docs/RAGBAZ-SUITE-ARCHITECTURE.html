@@ -32,7 +32,7 @@
 <main class="shell">
   <header class="hero">
     <div><div class="eyebrow">RAGBAZ architecture atlas</div><h1>One portable system.<br>Four clear authorities.</h1><p class="lead">How v-BAZ, Rebekah, WeftMark and Sylvae compose into an offline-first, automatically online-capable environment for governed agentic work—without collapsing their responsibilities into one monolith.</p></div>
-    <aside class="stamp"><strong>Architecture snapshot</strong><br>23 September 2026<br><span class="path">Covers the active integration and portable USB Phase 2 branches.</span></aside>
+    <aside class="stamp"><strong>Architecture snapshot</strong><br>1 October 2026<br><span class="path">Covers the active integration and portable USB Phase 2 branches.</span></aside>
   </header>
   <nav aria-label="Architecture sections"><a href="#together">Together</a><a href="#flow">End-to-end flow</a><a href="#vbaz">v-BAZ</a><a href="#rebekah">Rebekah</a><a href="#weftmark">WeftMark</a><a href="#sylvae">Sylvae</a><a href="#contracts">Contracts</a><a href="#status">Status</a></nav>
 
@@ -82,7 +82,7 @@
     <div class="repo-head"><div class="repo-name"><div class="sigil">V</div><div><h2>v-BAZ</h2><div class="path">github.com/tabenius/v-BAZ · default branch: main</div></div></div><span class="status active">USB Phase 2 active</span></div>
     <p class="sub">Portable machine substrate and installer: firmware, disks, boot, durable storage, isolated runtimes and offline artifact delivery.</p>
     <div class="grid"><article class="card"><h3>Owns</h3><ul><li>UEFI boot and Alpine A/B root slots</li><li>Host storage and persistence</li><li>VM/container runtime provisioning</li><li>Rebekah lifecycle on the host</li><li>Offline image/model staging</li></ul></article><article class="card"><h3>Does not own</h3><ul><li>Agent work readiness</li><li>Skill semantics or model routing policy</li><li>Rebekah’s user/session API</li><li>Evidence review decisions</li></ul></article></div>
-    <details open><summary>Portable USB Phase 2</summary><p>Kali persistence storage and checksum-pinned ISO staging are implemented and CI-proven. Remaining gates are Kali host autostart/boot wiring, reproducible first-boot customization and persistence across two complete outer-host reboots.</p><p class="path">Draft PR #8 · branch codex/portable-usb-phase-2</p></details>
+    <details open><summary>Portable USB Phase 2</summary><p>Kali persistence storage, official-version URL and SHA-256 pinning, atomic media acquisition, host autostart/boot wiring and retry-safe first-boot customization are implemented and CI-proven. Portable-image run 23 and wiring run 127 passed at <code>27ee658</code>. The sole remaining acceptance gate is persistence across two complete outer-host reboots.</p><p class="path">Draft PR #8 · branch codex/portable-usb-phase-2</p></details>
   </section>
 
   <section id="rebekah" class="repo">
@@ -132,8 +132,9 @@
       <tr><td>Rebekah link resolution</td><td><span class="status done">implemented</span></td><td>Gateway tests resolve real producer IDs and refuse guessed joins</td></tr>
       <tr><td>Rebekah packaged pins</td><td><span class="status done">CI green</span></td><td>Lock pins WeftMark <code>36f48a9</code>, Sylvae <code>bdcc6e9</code> and Ephor <code>5b05af5</code>; CI run 118 passed</td></tr>
       <tr><td>v-BAZ portable host</td><td><span class="status done">CI green</span></td><td>Alpine A/B image and OVMF boot gate pass</td></tr>
-      <tr><td>Kali offline media + persistence storage</td><td><span class="status done">CI green</span></td><td>Checksum-pinned media and non-overwriting ext4 persistence</td></tr>
-      <tr><td>Kali durable guest proof</td><td><span class="status open">open gate</span></td><td>Autostart, customization and two complete host reboots</td></tr>
+      <tr><td>Kali media + persistence storage</td><td><span class="status done">CI green</span></td><td>Official 2026.2 URL/SHA-256 pin, atomic acquisition and non-overwriting ext4 persistence</td></tr>
+      <tr><td>Kali host integration</td><td><span class="status done">CI green</span></td><td>OpenRC autostart, KVM/TCG selection, loopback-only VNC/SSH and retry-safe customization</td></tr>
+      <tr><td>Kali durable guest proof</td><td><span class="status open">open gate</span></td><td>Marker must survive two complete outer-host reboots</td></tr>
     </tbody></table>
     <div class="callout warn"><strong>Phase-completion rule:</strong> implementation is not the same as verification. No portable USB Phase 2 completion claim is valid until the Kali marker survives two complete outer-host reboot cycles.</div>
   </section>
