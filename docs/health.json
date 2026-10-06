@@ -8,7 +8,7 @@
       "method": "GET",
       "path": "/healthz",
       "expected_status": 200,
-      "expected_json": {"ok": true},
+      "expected_body": "ok",
       "authentication": "none",
       "timeout_seconds": 2,
       "meaning": "Gateway answers; not backend readiness or audit integrity."

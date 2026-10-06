@@ -4,17 +4,17 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     weftmark-src = {
-      url = "github:tabenius/WeftMark/bab7fb4";
+      url = "github:tabenius/WeftMark/8d4e270f3aa18877ba177a19fa5da0fea8266acf";
       flake = false;
     };
     sylvae-src = {
-      url = "github:tabenius/sylvae/ee9af27";
+      url = "github:tabenius/sylvae/8b0f950ee2d4ee6f9f24fc58393243c5d4a1b27d";
       flake = false;
     };
     # Pin the public Nostoi source that ships CLI verification for all suite
     # audit formats, including WeftMark JSONL and Ephor SQLite.
     nostoi-src = {
-      url = "github:tabenius/nostoi/d5dd0ef87185e1213889eb505f482a860f393cfd";
+      url = "github:tabenius/nostoi/4e3827a1434cc2bb91f8ef512507f7bc8dfcdbbf";
       flake = false;
     };
     # Ephor is opt-in, and its source is private. Nix fetches every locked
