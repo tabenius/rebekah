@@ -14,6 +14,7 @@
 #   REBEKAH_MEMORY     memory limit, e.g. 16g            (default: none)
 #   REBEKAH_ENV_FILE   extra container env (no secrets)  (default: ~/.config/rebekah/container.env)
 #   REBEKAH_RUNTIME_STATUS_DIR host snapshot directory (optional, read-only)
+#   REBEKAH_DAILY_AGENDA_HOST_DIR generated agenda directory (optional, read-only)
 #
 # Secrets are Podman secrets, passed as environment variables inside the
 # container only, so `podman inspect` does not show them. Each is used when it
@@ -67,6 +68,16 @@ if [[ -n "${REBEKAH_RUNTIME_STATUS_DIR:-}" ]]; then
 fi
 if [[ -r "$env_file" ]]; then
   args+=(--env-file "$env_file")
+fi
+if [[ -n "${REBEKAH_DAILY_AGENDA_HOST_DIR:-}" ]]; then
+  agenda_dir="$REBEKAH_DAILY_AGENDA_HOST_DIR"
+  if [[ ! -d "$agenda_dir" || "$agenda_dir" != /* || "$agenda_dir" == *,* ]]; then
+    printf 'rebekah-run: agenda directory must be absolute, exist and contain no comma\n' >&2
+    exit 1
+  fi
+  # Mount the directory, not files: generation atomically replaces each file.
+  args+=(--mount "type=bind,src=$agenda_dir,dst=/run/daily-agenda,ro")
+  args+=(--env "REBEKAH_DAILY_AGENDA_DIR=/run/daily-agenda")
 fi
 for pair in \
   rebekah-dash-push-key:REBEKAH_DASH_PUSH_KEY \

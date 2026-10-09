@@ -67,6 +67,9 @@ its bridge, which runs only with `REBEKAH_EPHOR_ENABLE=1`.
   surfaces — the bridge and each MCP gate (`source`: `bridge` /
   `mcp:<name>`) — and `apply_command` decides each where it is held.
 - `nix/ui/index.html` — the gateway's built-in web console (static, same-origin).
+  Work includes a private Daily Agenda card/tab backed by the opt-in
+  `GET /api/v1/daily-agenda` projection; source/artifact configuration and
+  freshness semantics are in `docs/DAILY-AGENDA.md`.
   Goal-based nav (Work / Review / Runs / Models / System / Advanced): Work is the
   WeftMark board (five lanes on desktop, a single attention-first list with a
   lane filter on narrow screens) whose change-set cards open a Change Set detail

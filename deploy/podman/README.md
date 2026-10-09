@@ -86,3 +86,14 @@ systemctl --user restart rebekah.service
 ```
 
 State lives in the `rebekah-state` volume and survives restarts and updates.
+
+## Private Daily Agenda
+
+Set `REBEKAH_DAILY_AGENDA_HOST_DIR` in the host launcher settings to a generated
+agenda directory. The launcher mounts the directory read-only at `/run/daily-agenda`
+and sets the gateway's `REBEKAH_DAILY_AGENDA_DIR` automatically. Grant UID 10005
+read/traverse access to the directory and generated files, including replacements
+through a suitable default ACL. The agenda is readable by authenticated gateway
+users and authorized viewers of the connected Dash instance, so select an instance
+with the intended private audience. Contract and generation/freshness details:
+[`docs/DAILY-AGENDA.md`](../../docs/DAILY-AGENDA.md).

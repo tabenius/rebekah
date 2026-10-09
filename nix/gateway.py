@@ -42,6 +42,7 @@ import posixpath
 import re
 import secrets
 import socket
+import stat
 import sqlite3
 import ssl
 import subprocess
@@ -101,6 +102,8 @@ class Config:
             "REBEKAH_NOSTOI_LEDGER", state_dir + "/gateway/nostoi.jsonl"
         ).strip()
         self.runtime_snapshot = env.get("REBEKAH_RUNTIME_STATUS", env.get("RAGBAZ_RUNTIME_STATUS", "")).strip()
+        # Private, operator-selected read-only artifact directory; never scan the host.
+        self.daily_agenda_dir = env.get("REBEKAH_DAILY_AGENDA_DIR", "").strip()
 
         # Internal (token) scheme.
         self.token = env.get("REBEKAH_GATEWAY_TOKEN", "")
@@ -248,6 +251,8 @@ class Config:
             problems.append("REBEKAH_GATEWAY_TLS_KEY set without REBEKAH_GATEWAY_TLS_CERT")
         if self.dash_enabled:
             problems.extend(dash_problems(self))
+        if self.daily_agenda_dir and not os.path.isabs(self.daily_agenda_dir):
+            problems.append("REBEKAH_DAILY_AGENDA_DIR must be an absolute directory path")
         if not self.backends:
             problems.append(
                 "no exposed backends: set REBEKAH_GATEWAY_EXPOSE to a subset of "
@@ -594,6 +599,142 @@ def runtime_snapshot(path):
         return {**data, "status": state, "age_seconds": age}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return {**base, "status": "unavailable", "summary": ["Host runtime inventory unavailable or invalid."]}
+
+
+AGENDA_MAX_FILE = 1024 * 1024
+AGENDA_MAX_VIEW = 384 * 1024
+AGENDA_MAX_AGE = 24 * 3600
+
+
+def _agenda_file(directory, name, maximum=AGENDA_MAX_FILE):
+    # Fixed filenames only. Refuse symlinks/FIFOs/devices and bound bytes before JSON parsing.
+    fd = os.open(os.path.join(directory, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("not a regular file")
+        raw = stream.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError("oversized agenda file")
+    return raw
+
+
+def _agenda_text(value, maximum=12000):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("invalid agenda text")
+    return value[:maximum]
+
+
+def _agenda_time(value):
+    if not isinstance(value, str) or len(value) > 40:
+        raise ValueError("invalid agenda time")
+    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if stamp.tzinfo is None:
+        raise ValueError("agenda time requires zone")
+    return stamp
+
+
+def v1_daily_agenda(cfg):
+    """Project the generated edition, never its HTML or workstation file links.
+
+    The envelope observation is this read; source_observed_at remains the original
+    Git/Frog evidence time. Reads/connector refresh do not run a collector.
+    """
+    base = {"schema": "rebekah.daily-agenda.v1", "source": "rebekah-gateway",
+            "observed_at": _iso_now(), "status": "not-configured", "stale": True,
+            "source_observed_at": None, "generated_at": None, "generation_id": None,
+            "window_start": None, "window_end": None, "ranking": None,
+            "collection_error_count": 0, "items": []}
+    directory = cfg.daily_agenda_dir
+    if not directory:
+        return base
+    try:
+        manifest = json.loads(_agenda_file(directory, "manifest.json", 64 * 1024))
+        if manifest.get("schema") != "ragbaz.daily-agenda-manifest.v1":
+            raise ValueError("unknown agenda manifest")
+        documents = {}
+        for name in ("snapshot.json", "editorial.json"):
+            raw = _agenda_file(directory, name)
+            record = manifest["files"][name]
+            if record["bytes"] != len(raw) or record["sha256"] != hashlib.sha256(raw).hexdigest():
+                raise ValueError("agenda generation changed or failed integrity check")
+            documents[name] = json.loads(raw)
+        snapshot, editorial = documents["snapshot.json"], documents["editorial.json"]
+        if snapshot.get("schema") != "ragbaz.daily-agenda.v1" or editorial.get("schema") != "ragbaz.daily-agenda-editorial.v1":
+            raise ValueError("unknown agenda source schema")
+        observed = _agenda_time(snapshot["observed_at"])
+        if manifest["observed_at"] != snapshot["observed_at"]:
+            raise ValueError("mixed agenda generation")
+        generated_at = manifest.get("generated_at", manifest["observed_at"])
+        generated = _agenda_time(generated_at)
+        start, end = _agenda_time(snapshot["window_start"]), _agenda_time(snapshot["window_end"])
+        now = datetime.now(timezone.utc)
+        if not start < end <= observed <= generated or max((observed - now).total_seconds(), (generated - now).total_seconds()) > 300:
+            raise ValueError("invalid agenda observation window")
+        tasks = snapshot["tasks"]
+        if not isinstance(tasks, list) or len(tasks) > 1000:
+            raise ValueError("invalid agenda tasks")
+        byslug = {t["slug"]: t for t in tasks}
+        skipped = {t["slug"]: t["reason"] for t in snapshot["schedule"].get("skipped", [])}
+        eligible = {t["slug"] for t in snapshot["schedule"].get("tasks", [])}
+        items = []
+        for project in snapshot["projects"][:10]:
+            name = _agenda_text(project["name"], 100)
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", name):
+                raise ValueError("invalid project id")
+            config = editorial["projects"].get(name, {})
+            own = [t for t in tasks if t.get("repo_path") == project["path"]]
+            own += [byslug[s] for s in config.get("related", []) if s in byslug and byslug[s] not in own]
+            own.sort(key=lambda t: (t["slug"] != config.get("preferred"), t["workflow_status"] != "in_progress", t["priority"], t["slug"]))
+            projected_tasks = []
+            for task in own[:40]:
+                slug = _agenda_text(task["slug"], 120)
+                scope = _agenda_text(task.get("what_text"))
+                scheduler = ("Eligible at collection time; recheck before claiming" if slug in eligible
+                             else "At collection time: " + skipped.get(slug, "not returned as eligible; inspect native state"))
+                projected_tasks.append({"id": slug, "title": _agenda_text(task["title"], 300),
+                    "status": _agenda_text(task["workflow_status"], 40), "priority": _agenda_text(task["priority"], 20),
+                    "owner": _agenda_text(task.get("assigned_agent"), 120), "updated_at": task.get("updated_at"),
+                    "why": _agenda_text(task.get("why")), "scope": scope,
+                    "scope_truncated": len(task.get("what_text") or "") > len(scope),
+                    "steps": [_agenda_text(s, 2000) for s in editorial.get("task_steps", {}).get(slug, [])[:10]],
+                    "dependencies": [{"id": _agenda_text(d["depends_on_slug"], 120),
+                                      "relation": _agenda_text(d["relation"], 40),
+                                      "status": _agenda_text(snapshot["task_statuses"].get(d["depends_on_slug"], "unknown"), 40)}
+                                     for d in task.get("dependencies", [])[:40]],
+                    "scheduler_note": scheduler})
+            concepts = []
+            for key in config.get("concepts", [])[:8]:
+                concept = editorial["concepts"][key]
+                source = _agenda_text(concept.get("source"), 2000)
+                url = urllib.parse.urlsplit(source)
+                safe_url = source if url.scheme == "https" and url.hostname and not url.username and not url.password else None
+                concepts.append({"id": _agenda_text(key, 80), "title": _agenda_text(concept["title"], 200),
+                    "brief": _agenda_text(concept["brief"], 1000), "description": _agenda_text(concept["full"], 6000),
+                    "source_url": safe_url})
+            count = project["commit_count"]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0 or count != len(project["commits"]):
+                raise ValueError("invalid commit count")
+            preferred_active = any(t["slug"] == config.get("preferred") for t in own)
+            next_move = config.get("next") if preferred_active or not own else own[0]["title"]
+            items.append({"id": name, "title": name, "commit_count": count, "local_path_count": len(project["dirty"]),
+                "head": _agenda_text(project["head"], 64), "last_commit_at": project.get("last_commit_at") or None,
+                "recent_work": _agenda_text(project["commits"][0]["subject"] if count else "No commits in the window", 400),
+                "next_move": _agenda_text(next_move or "Inspect the project plan and record a bounded next task", 400),
+                "note": _agenda_text(config.get("fallback") if not own else "", 3000),
+                "tasks_truncated": len(own) > 40, "tasks": projected_tasks, "concepts": concepts})
+        result = {**base, "status": "ready", "stale": (now - observed).total_seconds() > AGENDA_MAX_AGE,
+                  "source_observed_at": snapshot["observed_at"], "generated_at": generated_at,
+                  "generation_id": _agenda_text(manifest["id"], 120), "window_start": snapshot["window_start"],
+                  "window_end": snapshot["window_end"], "ranking": _agenda_text(snapshot["ranking"], 400),
+                  "collection_error_count": len(snapshot.get("errors", [])), "items": items}
+        if len(json.dumps(result).encode()) > AGENDA_MAX_VIEW:
+            raise ValueError("oversized agenda projection")
+        return result
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError, RecursionError):
+        # Never return a half-generation or reveal host paths/parser details.
+        return {**base, "status": "unavailable"}
 
 
 def v1_system(cfg, auth):
@@ -1181,6 +1322,14 @@ def make_handler(cfg, auth):
                 return
             self._json(200, v1_oversight(cfg))
 
+        def _serve_v1_daily_agenda(self):
+            if self._authed() is None:
+                return
+            if self.command not in ("GET", "HEAD"):
+                self._fail(405, "method not allowed")
+                return
+            self._json(200, v1_daily_agenda(cfg))
+
         def _serve_v1_attention(self):
             if self._authed() is None:
                 return
@@ -1422,6 +1571,9 @@ def make_handler(cfg, auth):
             if raw_path in ("/api/v1/oversight", "/api/v1/oversight/"):
                 self._serve_v1_oversight()
                 return
+            if raw_path in ("/api/v1/daily-agenda", "/api/v1/daily-agenda/"):
+                self._serve_v1_daily_agenda()
+                return
             if raw_path in ("/api/v1/attention", "/api/v1/attention/"):
                 self._serve_v1_attention()
                 return
@@ -1528,6 +1680,7 @@ def make_handler(cfg, auth):
 DASH_PUSH_KEY_RE = re.compile(r"^rbkp_[0-9a-f]{12}_[A-Za-z0-9_-]{43}$")
 DASH_ENVELOPE = "rebekah.dash-push.v1"
 DASH_MAX_RESPONSE = 64 * 1024
+DASH_MAX_PUSH = 512 * 1024  # Dash connector's envelope byte cap
 DASH_TIMEOUT = 10
 MAX_COMMANDS = 20  # decisions taken from one Dash response
 MAX_REMEMBERED = 500
@@ -1590,12 +1743,22 @@ class DashPusher:
 
     def views(self):
         kanban = fetch_kanban(self.cfg)
-        return {
+        views = {
             "system": v1_system(self.cfg, self.auth),
             "attention": v1_attention(kanban),
             "change-sets": v1_changesets(kanban),
             "oversight": v1_oversight(self.cfg),
+            "daily-agenda": v1_daily_agenda(self.cfg),
         }
+        # A large optional edition must not prevent the existing work/review
+        # views from reaching Dash. Check the aggregate, not just each view.
+        body = {"schema": DASH_ENVELOPE, "views": views}
+        if len(json.dumps(body, separators=(",", ":")).encode()) > DASH_MAX_PUSH:
+            agenda = views["daily-agenda"]
+            views["daily-agenda"] = {"schema": agenda["schema"], "source": "rebekah-gateway",
+                "observed_at": agenda["observed_at"], "status": "unavailable", "stale": True,
+                "source_observed_at": None, "collection_error_count": 0, "items": []}
+        return views
 
     def take_commands(self, data):
         """Apply the decisions in a Dash response once each; True if any ran."""

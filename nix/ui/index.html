@@ -46,7 +46,7 @@
   .authbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .authbar input { min-width: 210px; }
   main { padding: 16px; max-width: 1400px; margin: 0 auto; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
   .tab { padding: 8px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent;
     font-weight: 600; }
   .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
@@ -134,6 +134,20 @@
   .skip:focus { left: 0; }
   .remember { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
   .remember input { width: auto; }
+  .agenda-entry { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 16px; }
+  .agenda-entry h3 { margin: 0 0 6px; }
+  .agenda-overview { padding: 0; list-style: none; }
+  .agenda-overview > li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1.5fr); gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .agenda-reading { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 24px; }
+  #agendaBody { overflow-wrap: anywhere; }
+  .agenda-task, .agenda-concept { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .agenda-task summary, .agenda-concept summary { cursor: pointer; }
+  .agenda-task summary:focus-visible, .agenda-concept summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .agenda-scope { white-space: pre-wrap; }
+  .agenda-concept summary { position: relative; color: var(--accent); text-decoration: underline dotted; }
+  .agenda-tooltip { position: absolute; bottom: calc(100% + 8px); right: 0; width: 260px; max-width: 80vw; padding: 12px; background: var(--ink); color: var(--panel); border-radius: 6px; opacity: 0; visibility: hidden; pointer-events: none; z-index: 2; transition: opacity 180ms, visibility 180ms; }
+  .agenda-concept summary:hover .agenda-tooltip, .agenda-concept summary:focus-visible .agenda-tooltip { opacity: 1; visibility: visible; }
+  @media (max-width: 700px) { .agenda-entry { flex-direction: column; align-items: flex-start; } .agenda-reading, .agenda-overview > li { grid-template-columns: minmax(0, 1fr); gap: 8px; } .agenda-tooltip { left: 0; right: auto; } }
   /* Comfortable tap targets on touch/narrow screens (WCAG 2.2 AA 44x44). */
   @media (max-width: 640px) {
     button, .tab, select, #laneFilter { min-height: 44px; }
@@ -196,6 +210,7 @@
 
   <div class="tabs" role="tablist" aria-label="Rebekah console">
     <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="true" tabindex="0">Work</div>
+    <div class="tab hidden" id="tab-agenda" role="tab" aria-controls="panel-agenda" aria-selected="false" tabindex="-1">Daily Agenda</div>
     <div class="tab" id="tab-attention" role="tab" aria-controls="panel-attention" aria-selected="false" tabindex="-1">Review</div>
     <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Runs</div>
     <div class="tab hidden" id="tab-ollama" role="tab" aria-controls="panel-ollama" aria-selected="false" tabindex="-1">Models</div>
@@ -214,6 +229,7 @@
   </section>
 
   <section id="panel-board" role="tabpanel" aria-labelledby="tab-board" tabindex="0">
+    <article class="tile agenda-entry hidden" id="agendaEntry"><div><h3>Daily Agenda · private workspace</h3><p class="status" id="agendaCardStatus">Git-week evidence, Frog roadmap and concept reminders.</p></div><button id="agendaOpen" type="button">Open latest agenda</button></article>
     <div class="rowbar board-filter" id="boardFilter">
       <label for="laneFilter">Lane</label>
       <select id="laneFilter" aria-label="Filter by lane">
@@ -222,6 +238,12 @@
     </div>
     <div class="empty" id="boardHint">Connect to load the WeftMark coordination board.</div>
     <div class="board hidden" id="board"></div>
+  </section>
+
+  <section id="panel-agenda" class="hidden" role="tabpanel" aria-labelledby="tab-agenda" tabindex="0">
+    <div class="rowbar"><h2>Daily Agenda</h2><span class="grow"></span><button id="agendaRefresh" type="button" class="ghost">Reload latest</button></div>
+    <p class="status">Reload reads the latest generated edition; it does not regenerate Git/Frog evidence. Activity is not priority. Suggested slices do not assign or complete native tasks.</p>
+    <div id="agendaBody"><p class="empty">Connect to read the private agenda.</p></div>
   </section>
 
   <section id="panel-services" class="hidden" role="tabpanel" aria-labelledby="tab-services" tabindex="0">
@@ -404,6 +426,9 @@
     loadBoard();
     loadServices();
     setupProductTabs();
+    $("tab-agenda").classList.remove("hidden");
+    $("agendaEntry").classList.remove("hidden");
+    loadAgenda();
     if (!boardTimer) boardTimer = setInterval(() => { loadAttention(); loadBoard(); }, 8000);
   }
 
@@ -435,6 +460,10 @@
     $("sysState").textContent = "◌ checking services…"; $("sysState").style.color = "";
     $("tab-opencode").classList.add("hidden");
     $("tab-ollama").classList.add("hidden");
+    agendaRequest += 1; agendaData = null; selectedAgendaId = "";
+    $("tab-agenda").classList.add("hidden");
+    $("agendaEntry").classList.add("hidden");
+    $("agendaBody").textContent = "Connect to read the private agenda.";
     selectTab("board");
   }
 
@@ -582,6 +611,89 @@
       $("connText").textContent = "connected · " + who + (profile ? " (" + profile + ")" : "")
         + " · " + ((info && info.expose) || []).join(", ");
     }
+  }
+
+  // --- Private agenda: data-only, native scopes and editorial slices separated.
+  let agendaData = null, selectedAgendaId = "", agendaRequest = 0;
+  async function loadAgenda() {
+    if (!info) return;
+    const request = ++agendaRequest, connection = info;
+    $("agendaRefresh").disabled = true;
+    try {
+      const r = await api("/api/v1/daily-agenda");
+      if (request !== agendaRequest || info !== connection) return;
+      if (!r.ok || !r.data || r.data.schema !== "rebekah.daily-agenda.v1" || r.data.source !== "rebekah-gateway") throw new Error("Agenda request failed");
+      agendaData = r.data;
+      $("agendaCardStatus").textContent = agendaData.status === "ready" ? "Git/Frog observed " + agendaTime(agendaData.source_observed_at) : "Daily Agenda " + agendaData.status + ".";
+      renderAgenda();
+    } catch (e) {
+      if (request !== agendaRequest || info !== connection) return;
+      $("agendaCardStatus").textContent = "Latest edition unavailable; retry in the Daily Agenda tab.";
+      $("agendaBody").textContent = "Could not reload the agenda. Check the connection and try again.";
+    } finally {
+      if (request === agendaRequest) $("agendaRefresh").disabled = false;
+    }
+  }
+  function agendaTime(value) {
+    const d = new Date(value);
+    return value && !isNaN(d.getTime()) ? d.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC") : "unknown";
+  }
+  function renderAgenda() {
+    const body = $("agendaBody"); body.textContent = "";
+    const d = agendaData;
+    if (!d || d.status !== "ready") {
+      body.appendChild(el("p", "empty", d && d.status === "not-configured" ? "Ask the operator to mount the agenda directory read-only and set REBEKAH_DAILY_AGENDA_DIR." : "The edition could not be read or verified; finish generation and reload."));
+      return;
+    }
+    const stale = d.stale || Date.now() - Date.parse(d.source_observed_at) > 24 * 3600 * 1000;
+    body.appendChild(el("p", stale ? "banner" : "status", (stale ? "Older than a daily checkpoint or marked stale. " : "") + "Git/Frog observed " + agendaTime(d.source_observed_at) + "; rendered " + agendaTime(d.generated_at) + "."));
+    body.appendChild(el("p", "status", d.ranking + ". Window: " + agendaTime(d.window_start) + " — " + agendaTime(d.window_end) + ". Local counts are changed/untracked paths, not dated work."));
+    if (d.collection_error_count) body.appendChild(el("p", "banner", "Incomplete collection: " + d.collection_error_count + " source failures."));
+    const list = el("ol", "agenda-overview"); list.setAttribute("aria-label", "Active project agenda");
+    (d.items || []).forEach((p, index) => {
+      const row = el("li"), title = el("div");
+      title.appendChild(el("strong", null, String(index + 1).padStart(2, "0") + " · " + p.title));
+      title.appendChild(el("p", "status", p.commit_count + " commits · " + p.local_path_count + " local paths"));
+      row.appendChild(title); row.appendChild(el("p", null, p.recent_work));
+      const button = el("button", "ghost", p.next_move); button.type = "button";
+      button.setAttribute("aria-pressed", String(p.id === selectedAgendaId)); button.setAttribute("aria-controls", "agendaRoadmap");
+      button.addEventListener("click", () => {
+        selectedAgendaId = p.id; renderAgenda();
+        // Restore the initiating button after re-render, never focus a window.
+        const buttons = $("agendaBody").querySelectorAll(".agenda-overview button");
+        if (buttons[index]) buttons[index].focus({ preventScroll: true });
+      });
+      row.appendChild(button); list.appendChild(row);
+    });
+    body.appendChild(list);
+    const roadmap = el("div"); roadmap.id = "agendaRoadmap"; body.appendChild(roadmap);
+    const p = (d.items || []).find((item) => item.id === selectedAgendaId);
+    if (!p) { roadmap.appendChild(el("p", "empty", "Choose a next move to unfold the full roadmap.")); return; }
+    roadmap.appendChild(el("h3", null, p.title + " · roadmap"));
+    roadmap.appendChild(el("p", "status", "HEAD " + (p.head || "unavailable") + ". Check current native scope, owner and evidence before continuing."));
+    const grid = el("div", "agenda-reading"), tasks = el("div"), margin = el("aside"); margin.setAttribute("aria-label", "Concept reminders");
+    if (p.note) tasks.appendChild(el("p", null, p.note));
+    (p.tasks || []).forEach((t) => {
+      const task = el("details", "agenda-task"); task.appendChild(el("summary", null, t.title + " · " + t.priority + " · " + t.status));
+      task.appendChild(el("p", "status", t.id + " · " + (t.owner ? "assigned to " + t.owner : "unassigned") + " · record updated " + agendaTime(t.updated_at)));
+      task.appendChild(el("p", null, "Why: " + (t.why || "No rationale recorded.")));
+      task.appendChild(el("h4", null, "Full recorded scope")); task.appendChild(el("p", "agenda-scope", t.scope || "No scope recorded."));
+      if (t.scope_truncated) task.appendChild(el("p", "banner", "Scope exceeds this view’s limit; inspect the full Frog record."));
+      task.appendChild(el("p", "status", t.scheduler_note));
+      if ((t.steps || []).length) { task.appendChild(el("h4", null, "Suggested execution slices · editorial")); const steps = el("ol"); t.steps.forEach((s) => steps.appendChild(el("li", null, s))); task.appendChild(steps); }
+      if ((t.dependencies || []).length) { task.appendChild(el("h4", null, "Recorded dependency edges")); const deps = el("ul"); t.dependencies.forEach((dep) => deps.appendChild(el("li", null, dep.relation + ": " + dep.id + " · " + dep.status))); task.appendChild(deps); }
+      task.appendChild(el("p", "status", "Native record: frog --json task info " + t.id)); tasks.appendChild(task);
+    });
+    if (p.tasks_truncated) tasks.appendChild(el("p", "banner", "More than 40 related records: inspect Frog for the rest."));
+    margin.appendChild(el("h4", null, "In the margin"));
+    (p.concepts || []).forEach((c, index) => {
+      const concept = el("details", "agenda-concept"), summary = el("summary", null, c.title), tip = el("span", "agenda-tooltip", c.brief);
+      tip.id = "agenda-tip-" + index; tip.setAttribute("role", "tooltip"); summary.setAttribute("aria-describedby", tip.id); summary.appendChild(tip);
+      concept.appendChild(summary); concept.appendChild(el("p", null, c.description));
+      try { const url = new URL(c.source_url); if (url.protocol === "https:" && !url.username && !url.password) { const a = el("a", "link", "Concept source ↗"); a.href = url.href; a.rel = "noreferrer"; concept.appendChild(a); } } catch (e) {}
+      margin.appendChild(concept);
+    });
+    grid.appendChild(tasks); grid.appendChild(margin); roadmap.appendChild(grid);
   }
 
   // --- Board ---------------------------------------------------------------
@@ -966,7 +1078,7 @@
   }
 
   // --- Tabs ----------------------------------------------------------------
-  const TABS = ["attention", "board", "opencode", "ollama", "services", "console"];
+  const TABS = ["attention", "board", "agenda", "opencode", "ollama", "services", "console"];
   function visibleTabs() {
     return TABS.filter((t) => !$("tab-" + t).classList.contains("hidden"));
   }
@@ -978,6 +1090,7 @@
       $("panel-" + t).classList.toggle("hidden", !selected);
     });
     if (focus) $("tab-" + name).focus();
+    if (name === "agenda" && info) loadAgenda();
   }
   TABS.forEach((t) => {
     const tab = $("tab-" + t);
@@ -1015,6 +1128,8 @@
   $("user").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
   $("attRefresh").addEventListener("click", loadAttention);
+  $("agendaOpen").addEventListener("click", () => selectTab("agenda", true));
+  $("agendaRefresh").addEventListener("click", loadAgenda);
   $("svcRefresh").addEventListener("click", loadServices);
   $("csClose").addEventListener("click", () => $("csDialog").close());
   $("csDialog").addEventListener("close", () => {
@@ -1100,6 +1215,9 @@
     }
     if (path.indexOf("/api/v1/change-sets/") === 0)
       return Promise.resolve(demoChangeSetDetail(decodeURIComponent(path.slice("/api/v1/change-sets/".length))));
+    if (path === "/api/v1/daily-agenda") return Promise.resolve({ status: 200, ok: true, data: {
+      schema: "rebekah.daily-agenda.v1", source: "rebekah-gateway", observed_at: new Date().toISOString(),
+      status: "not-configured", stale: true, source_observed_at: null, items: [], collection_error_count: 0 } });
     return Promise.resolve({ status: 200, ok: true, data: { demo: true, path } });
   }
   const DEMO_BOARD = {

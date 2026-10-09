@@ -55,6 +55,11 @@ endpoints, forwards termination, and fails when any required service exits.
 
 ## Runtime topology
 
+Work includes a private **Daily Agenda** card/tab in the local console and the
+connected Dash workspace. It reads an explicitly configured generated Git/Frog
+agenda directory through the authenticated gateway, preserving source freshness
+and task ownership. Setup and contract: [Daily Agenda](docs/DAILY-AGENDA.md).
+
 ```mermaid
 flowchart TB
     Client["LAN client / GUI / HITL guest"]
