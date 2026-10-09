@@ -154,7 +154,7 @@ doctor() {
       gateway) chain_path="$state_dir/gateway/nostoi.jsonl"; chain_format=nostoi-v1 ;;
       sylvae) chain_path="$state_dir/sylvae/runs/nostoi.jsonl"; chain_format=nostoi-v1 ;;
       weftmark) chain_path="$state_dir/weftmark/ledger.jsonl"; chain_format=weftmark-ledger-v1 ;;
-      ephor) chain_path="$ephor_db"; chain_format=ephor-audit-v1 ;;
+      ephor) chain_path="$ephor_db"; chain_format="ephor-audit-v1" ;;
     esac
     if [[ -s "$chain_path" ]]; then
       if nostoi verify --format "$chain_format" "$chain_path" >/dev/null; then
