@@ -28,10 +28,28 @@
         "type": "github"
       }
     },
+    "nostoi-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790983979,
+        "narHash": "sha256-jAtgTs/SlfUMowF4VTst8QqPiO0VibSK7sPmIRMmjqI=",
+        "owner": "tabenius",
+        "repo": "nostoi",
+        "rev": "4e3827a1434cc2bb91f8ef512507f7bc8dfcdbbf",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tabenius",
+        "repo": "nostoi",
+        "rev": "4e3827a1434cc2bb91f8ef512507f7bc8dfcdbbf",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "ephor-src": "ephor-src",
         "nixpkgs": "nixpkgs",
+        "nostoi-src": "nostoi-src",
         "sylvae-src": "sylvae-src",
         "weftmark-src": "weftmark-src"
       }
@@ -39,33 +57,34 @@
     "sylvae-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790410941,
-        "narHash": "sha256-Uw5OPmGFBt8GIW6XRfsE5p+zxqx3lwzgZEIHPN7AzqA=",
+        "lastModified": 1790984469,
+        "narHash": "sha256-y0LjAFL0ziXDIqOgGcqypYW4tV4GKEFX2Om4t7D3PI4=",
         "owner": "tabenius",
         "repo": "sylvae",
-        "rev": "a71820eaed58a683a5255feac7fb727ea16cab9b",
+        "rev": "8b0f950ee2d4ee6f9f24fc58393243c5d4a1b27d",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
-        "ref": "master",
         "repo": "sylvae",
+        "rev": "8b0f950ee2d4ee6f9f24fc58393243c5d4a1b27d",
         "type": "github"
       }
     },
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790455859,
-        "narHash": "sha256-+UsQ3FIh0H79twMtLb+tlYg5mj3lZJy8on4ZjgKtsqM=",
+        "lastModified": 1790984549,
+        "narHash": "sha256-+nT5iCoLJvKD4NkputzIrWnmmao60n+FpXXZ5TQ5EZ4=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "032b800cfab789a9d93cd82ad552570603e1d3fd",
+        "rev": "8d4e270f3aa18877ba177a19fa5da0fea8266acf",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
         "repo": "WeftMark",
+        "rev": "8d4e270f3aa18877ba177a19fa5da0fea8266acf",
         "type": "github"
       }
     }
