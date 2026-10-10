@@ -887,11 +887,11 @@ def _hold_item(held, source, deadline_ms, evidence=None):
         flags = [v.get("rule_id") for v in (policy.get("violations") or []) if isinstance(v, dict)]
     # The chain the hold sits on. Both surfaces report it: the bridge directly,
     # the MCP gate through its evidence (the capture entry's hash). Absent when
-    # an older surface omits it; Dash then assumes the chain is intact.
+    # an older surface omits it; Dash then reports validity as unknown.
     entry_hash = _hash64(held.get("entry_hash")) or _hash64(evidence.get("hash"))
     chain_valid = held.get("chain_valid")
     if not isinstance(chain_valid, bool):
-        chain_valid = entry_hash is not None if (held.get("entry_hash") is not None or evidence.get("hash") is not None) else None
+        chain_valid = None
     return {
         "request_id": _text(held.get("request_id"), 80),
         "status": _text(held.get("status"), 40),
