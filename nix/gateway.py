@@ -872,12 +872,26 @@ def _argument_strings(arguments):
     return [] if arguments is None else [arguments]
 
 
+def _hash64(value):
+    """A 64-character hex chain hash, or None (what Dash accepts)."""
+    if isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdefABCDEF" for c in value):
+        return value
+    return None
+
+
 def _hold_item(held, source, deadline_ms, evidence=None):
     evidence = evidence if isinstance(evidence, dict) else {}
     policy = evidence.get("policy") if isinstance(evidence.get("policy"), dict) else {}
     flags = held.get("risk_flags")
     if flags is None:
         flags = [v.get("rule_id") for v in (policy.get("violations") or []) if isinstance(v, dict)]
+    # The chain the hold sits on. Both surfaces report it: the bridge directly,
+    # the MCP gate through its evidence (the capture entry's hash). Absent when
+    # an older surface omits it; Dash then reports validity as unknown.
+    entry_hash = _hash64(held.get("entry_hash")) or _hash64(evidence.get("hash"))
+    chain_valid = held.get("chain_valid")
+    if not isinstance(chain_valid, bool):
+        chain_valid = None
     return {
         "request_id": _text(held.get("request_id"), 80),
         "status": _text(held.get("status"), 40),
@@ -888,7 +902,11 @@ def _hold_item(held, source, deadline_ms, evidence=None):
         "risk_flags": [_text(flag, 80) for flag in (flags or [])[:10]],
         "deadline": _iso_ms(deadline_ms),
         "entry_id": _text(held.get("entry_id") or evidence.get("entry_id"), 80),
-        # Which Ephor surface holds it: the bridge, or the MCP gate in front of
+        # The session that raised the hold, and its chain entry.
+        "session_id": _text(held.get("session_id") or evidence.get("session_id"), 80),
+        "entry_hash": entry_hash,
+        "chain_valid": chain_valid,
+        # Which Ephor surface holds it: "bridge", or the MCP gate in front of
         # a service's tools ("mcp:weftmark"). Decisions go back to the same one.
         "source": source,
     }
@@ -1028,8 +1046,30 @@ def _decision_outcome(cfg, command, intent, result):
         result.update(ok=False, outcome="unknown", error="audit_outcome_unavailable")
 
 
+def _decision_chain(action):
+    """The Ephor chain event that recorded a decision, when the reply carries one.
+
+    Both surfaces attach the append receipt to the decided action
+    (`decision_evidence`): its entry id and hash. Dash stores them on the
+    command so an auditor can walk from its decision row to the chain.
+    """
+    evidence = action.get("decision_evidence") if isinstance(action, dict) else None
+    if not isinstance(evidence, dict):
+        return None
+    entry_id = evidence.get("entry_id")
+    entry_hash = _hash64(evidence.get("hash"))
+    if not isinstance(entry_id, str) and entry_hash is None:
+        return None
+    chain = {}
+    if isinstance(entry_id, str):
+        chain["entry_id"] = entry_id[:80]
+    if entry_hash is not None:
+        chain["entry_hash"] = entry_hash
+    return chain
+
+
 def apply_command(cfg, command, now_ms=None):
-    """Apply one decision from Dash; returns {id, ok, outcome?, error?}."""
+    """Apply one decision from Dash; returns {id, ok, outcome?, error?, chain?}."""
     cid = command.get("id") if isinstance(command, dict) else None
     if not isinstance(cid, str) or not COMMAND_ID_RE.match(cid):
         return None  # not addressable: nothing to report back to
@@ -1148,6 +1188,10 @@ def apply_command(cfg, command, now_ms=None):
         path = "/oversight/escalate"
         body = {"request_id": request_id, "target_queue": queue,
                 "rationale": "%s (escalated by %s)" % (rationale, actor)}
+    # The Dash command id travels with the decision: as an idempotency key, and
+    # as a structured field Ephor can record in its chain (external_ref),
+    # rather than buried in the rationale text.
+    body = dict(body, external_ref=cid)
 
     try:
         intent = _decision_intent(
@@ -1173,6 +1217,9 @@ def apply_command(cfg, command, now_ms=None):
         action = ((reply or {}).get("result") or {}).get("action")
         if isinstance(action, dict):
             result.update(ok=True, outcome=_text(action.get("status"), 40))
+            chain = _decision_chain(action)
+            if chain is not None:
+                result["chain"] = chain
         elif reply is None:
             result["error"] = "ephor_unreachable"
         elif ((reply.get("error") or {}).get("code")) == -32010:
@@ -1183,9 +1230,14 @@ def apply_command(cfg, command, now_ms=None):
         return result
 
     status, data = internal_json(cfg, "ephor", "POST", path, body,
-                                 bearer=cfg.ephor_oversight_token)
+                                 bearer=cfg.ephor_oversight_token,
+                                 headers={"Idempotency-Key": "dash-" + cid})
     if status == 200 and isinstance(data, dict):
-        result.update(ok=True, outcome=_text((data.get("action") or {}).get("status"), 40))
+        action = data.get("action")
+        result.update(ok=True, outcome=_text(action.get("status") if isinstance(action, dict) else None, 40))
+        chain = _decision_chain(action)
+        if chain is not None:
+            result["chain"] = chain
     elif status in (401, 403):
         result["error"] = "ephor_refused_credential"
     else:

@@ -119,7 +119,8 @@ class Ephor(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-        Ephor.calls.append((self.path, self.headers.get("Authorization"), body))
+        Ephor.calls.append((self.path, self.headers.get("Authorization"), body,
+                            self.headers.get("Idempotency-Key")))
         if self.path == "/oversight/list":
             items = [h for h in Ephor.holds.values() if h["status"] == body.get("status")]
             return self._send(200, {"items": items, "total": len(items), "next_cursor": None})
@@ -130,6 +131,8 @@ class Ephor(BaseHTTPRequestHandler):
             return self._send(400, {"error": "Approval request not found"})
         if self.path == "/oversight/decide":
             hold.update(status=body["decision"], reviewer=body["reviewer"], rationale=body["rationale"])
+            # The append receipt the real bridge attaches to a decided action.
+            hold["decision_evidence"] = {"entry_id": "ev-decided", "hash": "d" * 64, "accepted": True}
         elif self.path == "/oversight/defer":
             hold["deadline_ms"] += body["defer_ms"]
         elif self.path == "/oversight/escalate":
@@ -180,7 +183,8 @@ class Gate(socketserver.StreamRequestHandler):
             reply = {"result": {"action": Gate.holds[rid]}}
         elif method == "oversight.decide":
             Gate.holds[rid].update(status={"approve": "approved", "deny": "denied"}[params["decision"]],
-                                   reviewer=params["reviewer"])
+                                   reviewer=params["reviewer"],
+                                   decision_evidence={"entry_id": "ev-gate", "hash": "e" * 64, "accepted": True})
             reply = {"result": {"action": Gate.holds[rid]}}
         else:
             reply = {"error": {"code": -32601, "message": "method not found"}}
@@ -192,6 +196,7 @@ def gate_hold(rid, action="weft_handoff_create"):
     """A held tools/call as agent-proxy lists it."""
     return {"request_id": rid, "action": action, "status": "pending",
             "arguments": {"change_set_id": "cs-1", "to": "reviewer"},
+            "session_id": "s", "entry_hash": "a" * 64, "chain_valid": True,
             "evidence": {"session_id": "s", "agent_class": "OpenCodeAgent", "entry_id": "e-9",
                          "policy": {"allowed": True, "requires_approval": True, "risk_level": "high",
                                     "violations": [{"rule_id": "REBEKAH-HOLD-HANDOFF"}]}},
@@ -202,7 +207,7 @@ def hold(rid="11111111-2222-4333-8444-555555555555", deadline_ms=None):
     return {"request_id": rid, "session_id": "s", "agent_class": "CodingAgent",
             "action": "repo.push", "arguments": ["branch=main", "force=true"],
             "risk_level": "high", "risk_flags": ["requires_human_approval"],
-            "entry_id": "e-1", "status": "pending",
+            "entry_id": "e-1", "entry_hash": "b" * 64, "chain_valid": True, "status": "pending",
             "deadline_ms": deadline_ms if deadline_ms is not None else int(time.time() * 1000) + 600000}
 
 
@@ -406,6 +411,9 @@ class DecisionsTest(unittest.TestCase):
         self.assertEqual((item["request_id"], item["action"], item["risk_level"]), ("h1", "repo.push", "high"))
         self.assertEqual(item["arguments"], ["branch=main", "force=true"])
         self.assertRegex(item["deadline"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        # The chain the hold sits on: which session, which entry, still valid.
+        self.assertEqual((item["session_id"], item["entry_hash"], item["chain_valid"]),
+                         ("s", "b" * 64, True))
 
     def test_a_decision_records_intent_before_action_and_links_outcome(self):
         timeline = []
@@ -552,12 +560,15 @@ class DecisionsTest(unittest.TestCase):
         self.assertEqual(gated["arguments"], ["change_set_id=cs-1", "to=reviewer"])
         self.assertEqual(gated["risk_flags"], ["REBEKAH-HOLD-HANDOFF"])
         self.assertEqual(gated["agent_class"], "OpenCodeAgent")
+        self.assertEqual((gated["session_id"], gated["entry_hash"], gated["chain_valid"]),
+                         ("s", "a" * 64, True))
 
         self.give({"id": "cmd-2000001", "kind": "oversight.decide", "requested_by": "ada@example.com",
                    "params": {"request_id": "g1", "decision": "approved", "rationale": "Handoff is fine."}})
         self.clock.t += 30
         pusher.step()
-        self.assertEqual(self.results()[-1], [{"id": "cmd-2000001", "ok": True, "outcome": "approved"}])
+        self.assertEqual(self.results()[-1], [{"id": "cmd-2000001", "ok": True, "outcome": "approved",
+                                               "chain": {"entry_id": "ev-gate", "entry_hash": "e" * 64}}])
         decide = [p for m, p in Gate.calls if m == "oversight.decide"]
         self.assertEqual(len(decide), 1)
         self.assertEqual((decide[0]["decision"], decide[0]["reviewer"]), ("approve", "ada@example.com"))
@@ -593,7 +604,12 @@ class DecisionsTest(unittest.TestCase):
         self.assertEqual(Ephor.holds["h1"]["reviewer"], "ada@example.com")
         decide = [c for c in Ephor.calls if c[0] == "/oversight/decide"]
         self.assertEqual(decide[0][1], "Bearer " + OVERSIGHT_TOKEN)
-        self.assertEqual(self.results()[-1], [{"id": "cmd-0000001", "ok": True, "outcome": "approved"}])
+        # The command id reaches Ephor as a structured external_ref and as the
+        # idempotency key, so its chain event can point back at this decision.
+        self.assertEqual(decide[0][2].get("external_ref"), "cmd-0000001")
+        self.assertEqual(decide[0][3], "dash-cmd-0000001")
+        self.assertEqual(self.results()[-1], [{"id": "cmd-0000001", "ok": True, "outcome": "approved",
+                                               "chain": {"entry_id": "ev-decided", "entry_hash": "d" * 64}}])
         self.pusher.step()
         self.assertEqual(Dash.requests[-1]["path"], "/api/connector/push")
         self.assertEqual(Dash.requests[-1]["body"]["views"]["oversight"]["items"], [], "no longer pending")
