@@ -652,7 +652,7 @@
     if (d.generation) {
       report.appendChild(el("p", "hint", "Provider: " + d.generation.provider + " · Internet at generation: " + d.generation.network + " · " + d.generation.reason));
       report.appendChild(el("p", "agenda-scope", d.generation.summary || "No LLM summary available; local evidence is shown below."));
-      report.appendChild(el("p", "hint", "Model-generated editorial; check against native records."));
+      report.appendChild(el("p", "hint", d.generation.status === "ready" ? "Model-generated editorial; check against native records." : "No model produced this narrative; the evidence report stands on its own."));
     }
     body.appendChild(report);
     body.appendChild(el("p", "status", d.ranking + ". Window: " + agendaTime(d.window_start) + " — " + agendaTime(d.window_end) + ". Local counts are changed/untracked paths, not dated work."));
