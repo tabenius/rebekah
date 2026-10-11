@@ -49,7 +49,7 @@ jobs:
       # writes, or a fresh edition reads as unavailable. This is the check that
       # would have caught a stale image passing every source-level test.
       - name: Check the image against the agenda contract
-        run: CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image localhost/rebekah:latest
+        run: CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image rebekah:latest
       - name: Smoke test
         run: bash tests/smoke.sh
 
@@ -82,7 +82,7 @@ jobs:
         run: docker load < result
       - name: Check the image against the agenda contract
         if: env.HAS_EPHOR_TOKEN == 'true'
-        run: CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image localhost/rebekah:latest
+        run: CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image rebekah:ephor
       - name: Smoke test with Ephor enabled
         if: env.HAS_EPHOR_TOKEN == 'true'
         run: REBEKAH_SMOKE_EPHOR=1 bash tests/smoke.sh

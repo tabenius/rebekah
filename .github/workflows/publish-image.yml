@@ -44,6 +44,14 @@ jobs:
         run: nix build .#image --print-build-logs
         # result is a gzipped docker-archive tarball (dockerTools.buildLayeredImage)
 
+      # Publication runs independently of CI. Verify the exact archive here
+      # before moving registry tags, even if the parallel CI job fails.
+      - name: Load and verify the image before publication
+        run: |
+          docker load < result
+          CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image rebekah:latest
+          bash tests/smoke.sh
+
       - name: Compute image ref (lowercased owner)
         id: ref
         run: |
@@ -111,6 +119,13 @@ jobs:
       - name: Build the Ephor image
         if: env.HAS_EPHOR_TOKEN == 'true'
         run: nix build .#image-ephor --print-build-logs --override-input ephor-src "github:tabenius/BAZ.AI-governance/$(cat nix/ephor.rev)"
+
+      - name: Load and verify the Ephor image before publication
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        run: |
+          docker load < result
+          CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image rebekah:ephor
+          REBEKAH_SMOKE_EPHOR=1 bash tests/smoke.sh
 
       - name: Compute image ref (lowercased owner)
         if: env.HAS_EPHOR_TOKEN == 'true'
