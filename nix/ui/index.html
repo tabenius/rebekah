@@ -9,6 +9,7 @@
     --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5b6472;
     --line: #e3e6ea; --accent: #3b5bdb; --accent-ink: #ffffff;
     --ok: #2b8a3e; --warn: #b8860b; --bad: #c92a2a; --chip: #eef1f6;
+    --priority-p0: #3f6b2f; --priority-p1: #8a6412; --priority-p2: #234a63; --priority-p3: #6d6659;
     --lane-backlog: #8792a2; --lane-active: #3b5bdb; --lane-review: #b8860b;
     --lane-ready: #2b8a3e; --lane-done: #5b6472;
     --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -19,6 +20,7 @@
       --bg: #14161a; --panel: #1c1f26; --ink: #e8eaed; --muted: #9aa4b2;
       --line: #2b3038; --accent: #6b8afd; --accent-ink: #10131a; --chip: #262b34;
       --ok: #51cf66; --warn: #ffd43b; --bad: #ff6b6b;
+      --priority-p0: #8fbc6a; --priority-p1: #d9b44a; --priority-p2: #8fb8d4; --priority-p3: #a39a8b;
     }
   }
   * { box-sizing: border-box; }
@@ -81,6 +83,7 @@
   .chip.task { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
   .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); }
   .chip.att { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .chip.p0 { color: var(--priority-p0); } .chip.p1 { color: var(--priority-p1); } .chip.p2 { color: var(--priority-p2); } .chip.p3 { color: var(--priority-p3); }
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
   .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 14px; }
@@ -647,6 +650,14 @@
     }
     const stale = d.stale || Date.now() - Date.parse(d.source_observed_at) > 24 * 3600 * 1000;
     body.appendChild(el("p", stale ? "banner" : "status", (stale ? "Older than a daily checkpoint or marked stale. " : "") + "Git/Frog observed " + agendaTime(d.source_observed_at) + "; rendered " + agendaTime(d.generated_at) + "."));
+    const report = el("details", "agenda-report");
+    report.appendChild(el("summary", "", "Daily agent report · LLM: " + (d.generation?.model || "not recorded (legacy edition)")));
+    if (d.generation) {
+      report.appendChild(el("p", "hint", "Provider: " + d.generation.provider + " · Internet at generation: " + d.generation.network + " · " + d.generation.reason));
+      report.appendChild(el("p", "agenda-scope", d.generation.summary || "No LLM summary available; local evidence is shown below."));
+      report.appendChild(el("p", "hint", d.generation.status === "ready" ? "Model-generated editorial; check against native records." : "No model produced this narrative; the evidence report stands on its own."));
+    }
+    body.appendChild(report);
     body.appendChild(el("p", "status", d.ranking + ". Window: " + agendaTime(d.window_start) + " — " + agendaTime(d.window_end) + ". Local counts are changed/untracked paths, not dated work."));
     if (d.collection_error_count) body.appendChild(el("p", "banner", "Incomplete collection: " + d.collection_error_count + " source failures."));
     const list = el("ol", "agenda-overview"); list.setAttribute("aria-label", "Active project agenda");
@@ -671,10 +682,29 @@
     if (!p) { roadmap.appendChild(el("p", "empty", "Choose a next move to unfold the full roadmap.")); return; }
     roadmap.appendChild(el("h3", null, p.title + " · roadmap"));
     roadmap.appendChild(el("p", "status", "HEAD " + (p.head || "unavailable") + ". Check current native scope, owner and evidence before continuing."));
+    if (p.governed) {
+      const gov = el("details", "agenda-governed");
+      gov.appendChild(el("summary", null, "Governed work · WeftMark change sets (" + p.governed.change_sets.length + ")"));
+      gov.appendChild(el("p", "status", "WeftMark is the authority for change sets, claims, reviews and evidence. This is recorded work, not a plan."));
+      if (!p.governed.available) gov.appendChild(el("p", "status", p.governed.reason));
+      else if (!p.governed.change_sets.length) gov.appendChild(el("p", "status", "A ledger exists and records no change set."));
+      else {
+        const list = el("ul");
+        p.governed.change_sets.forEach((c) => {
+          const item = el("li", null, c.id + " · " + c.state + " · " + c.readiness + " · evidence " + c.evidence_current + " current");
+          item.appendChild(el("p", "status", c.goal));
+          if (c.dirty_paths) item.appendChild(el("p", "banner", c.dirty_paths + " uncommitted path(s); evidence binds to the observed head, not the worktree."));
+          if (c.readiness !== "ready" && c.readiness !== "approved") item.appendChild(el("p", "banner", "Not reviewed. A recorded receipt is not a review decision."));
+          list.appendChild(item);
+        });
+        gov.appendChild(list);
+      }
+      roadmap.appendChild(gov);
+    }
     const grid = el("div", "agenda-reading"), tasks = el("div"), margin = el("aside"); margin.setAttribute("aria-label", "Concept reminders");
     if (p.note) tasks.appendChild(el("p", null, p.note));
     (p.tasks || []).forEach((t) => {
-      const task = el("details", "agenda-task"); task.appendChild(el("summary", null, t.title + " · " + t.priority + " · " + t.status));
+      const task = el("details", "agenda-task"); task.appendChild(el("summary", null, t.title + " · <span class='chip p" + t.priority.slice(1) + "'>" + t.priority + "</span> · " + t.status));
       task.appendChild(el("p", "status", t.id + " · " + (t.owner ? "assigned to " + t.owner : "unassigned") + " · record updated " + agendaTime(t.updated_at)));
       task.appendChild(el("p", null, "Why: " + (t.why || "No rationale recorded.")));
       task.appendChild(el("h4", null, "Full recorded scope")); task.appendChild(el("p", "agenda-scope", t.scope || "No scope recorded."));
@@ -760,7 +790,7 @@
     if (c.kind === "task") {
       meta.appendChild(el("span", "chip task", "task"));
       if (c.task_state) meta.appendChild(el("span", "chip", c.task_state));
-      if (c.priority) meta.appendChild(el("span", "chip", "P:" + c.priority));
+      if (c.priority) meta.appendChild(el("span", "chip p" + c.priority.slice(1), "P:" + c.priority));
     } else {
       if (c.readiness) {
         const good = c.readiness === "ready" || c.readiness === "ready_with_follow_up";

@@ -54,6 +54,58 @@ widen other services' state-directory permissions to make this work.
 the connector must not rejuvenate old source evidence. Evidence older than 24
 hours is labeled stale; source failures have an explicit count.
 
+Editions may carry a bounded `generation` record: provider, model tag/digest,
+Internet status at generation, inference status, reason and plain-text editorial
+summary. Both consoles show the LLM used. Older editions remain readable and are
+labeled as lacking model provenance. `provider: none` means inference did not
+finish; never attribute a static fallback to a model that was only attempted.
+
+On the workspace host, use a persistent timer with a boot trigger and regular
+retries. Collect local data without waiting for network-online. Cache weights,
+bound local inference, mark missing sources and retain original observation times
+when re-rendering. The outbound Dash pusher retries independently of generation.
+
+## Contract and revision identity
+
+An edition names the generation contract it was written under, and the commit
+that wrote it. `AGENDA_CONTRACTS` in the gateway lists the contracts that build
+understands. When the two disagree the view reports `contract-mismatch`, naming
+both the edition's contract and the supported ones — never `unavailable`, which
+means a damaged artifact. An edition written before contracts existed has no
+field and is still served.
+
+The generator's commit and whether its tree was dirty travel in `generator`.
+This is provenance, not a dependency: a missing or unreadable revision never
+fails a projection, but a malformed one does, because a reader that silently
+accepted unknown fields is what let a stale gateway look healthy.
+
+### Before deploying
+
+`tests/deploy-check.py` compares a gateway against the source: container
+health (or a named image), the contracts each side accepts, and the digest of
+the gateway. It exists because tests exercise the *source* while the *running*
+image can be older — a mismatch that passed a full suite once already. It only
+inspects; it never rebuilds, restarts or deploys.
+
+It runs in three places:
+
+- **CI**, after the image is loaded, for both the baseline and the Ephor image.
+- **`rebekah-run`**, before the container starts, when an agenda directory is
+  mounted. A real mismatch (exit 1) refuses to start; an image that simply
+  cannot be inspected (exit 2) is reported and allowed through, since an
+  unreadable image will not start anyway and a runtime hiccup must not block a
+  legitimate activation. `REBEKAH_SKIP_CONTRACT_CHECK=1` overrides it.
+- **By hand**, against the running instance:
+
+```sh
+sudo -u baz0 env XDG_RUNTIME_DIR=/run/user/1001 \
+  REBEKAH_NAME=baz0 REBEKAH_DAILY_AGENDA_DIR=/srv/ragbaz/reports/daily-agenda \
+  python3 tests/deploy-check.py
+
+# or against an image before activating it
+python3 tests/deploy-check.py --image sha256:<pin>
+```
+
 States: `ready`, `not-configured`, `unavailable`. An unavailable/malformed or
 mixed generation returns no project data. The gateway verifies snapshot/editorial
 bytes against the manifest, checks schema/time-window consistency, rejects

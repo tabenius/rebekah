@@ -35,6 +35,34 @@ if ! git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
   exit 1
 fi
 
+# Refuse to start an image that cannot read the agenda edition on disk. The
+# contract only matters when an agenda directory is mounted, so an instance
+# without one is unaffected. Set REBEKAH_SKIP_CONTRACT_CHECK=1 to override,
+# but expect every edition to read as unavailable until it is fixed.
+agenda_dir="${REBEKAH_DAILY_AGENDA_HOST_DIR:-}"
+if [[ -n "$agenda_dir" && "${REBEKAH_SKIP_CONTRACT_CHECK:-0}" != "1" ]]; then
+  checker="$(dirname -- "$(dirname -- "$(dirname -- "$(readlink -f "${BASH_SOURCE[0]}")")")")/tests/deploy-check.py"
+  if [[ -f "$checker" ]]; then
+    if REBEKAH_DAILY_AGENDA_DIR="$agenda_dir" python3 "$checker" --image "$image"; then
+      :
+    else
+      status=$?
+      # Exit 2 means the check could not read the image at all - an
+      # unreadable image will not start anyway, and a permission or runtime
+      # hiccup must not block a legitimate activation. Only a real contract
+      # mismatch (exit 1) stops the launch.
+      if [[ $status -eq 1 ]]; then
+        printf 'rebekah-run: refusing to start; the image cannot read the agenda contract\n' >&2
+        printf 'rebekah-run: rebuild and activate it, or set REBEKAH_SKIP_CONTRACT_CHECK=1\n' >&2
+        exit 1
+      fi
+      printf 'rebekah-run: contract check could not inspect the image (exit %d); continuing\n' "$status" >&2
+    fi
+  else
+    printf 'rebekah-run: contract check not found at %s; continuing\n' "$checker" >&2
+  fi
+fi
+
 podman volume exists "$volume" || podman volume create "$volume" >/dev/null
 
 args=(

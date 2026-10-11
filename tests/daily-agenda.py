@@ -82,6 +82,97 @@ class AgendaTests(unittest.TestCase):
         self.assertEqual(view["source_observed_at"], old.isoformat())
         self.assertGreater(view["generated_at"], view["source_observed_at"])
 
+    def test_governed_change_sets_are_projected_bounded_and_validated(self):
+        self.snapshot["projects"][0]["governed"] = {"available": True, "reason": "", "change_sets": [{
+            "id": "agenda-outage", "goal": "Offline tolerance", "state": "active", "readiness": "unreviewed",
+            "branch": "main", "head": "c" * 40, "observed_at": self.observed.isoformat(),
+            "evidence_current": 2, "evidence_failed": 1, "evidence_obsolete": 0,
+            "dirty_paths": 3, "scope_collisions": 1}]}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        governed = view["items"][0]["governed"]
+        self.assertTrue(governed["available"])
+        change = governed["change_sets"][0]
+        self.assertEqual((change["evidence_current"], change["evidence_failed"]), (2, 1))
+        self.assertEqual(change["scope_collisions"], 1)
+        # A malformed governed record must fail the edition, not read as "none".
+        for mutation in (
+            lambda g: g["change_sets"][0].update(id="../escape"),
+            lambda g: g["change_sets"][0].update(evidence_current=-1),
+            lambda g: g["change_sets"][0].update(evidence_current=True),
+            lambda g: g["change_sets"][0].update(observed_at="not-a-time"),
+            lambda g: g.update(available="yes"),
+            lambda g: g.update(available=False, reason=""),
+        ):
+            self.snapshot["projects"][0]["governed"] = json.loads(json.dumps(self.snapshot["projects"][0]["governed"]))
+            mutation(self.snapshot["projects"][0]["governed"])
+            self.write_edition()
+            self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
+    def test_a_repository_without_a_ledger_is_not_a_collection_failure(self):
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertIsNone(view["items"][0]["governed"])
+        self.assertEqual(view["collection_error_count"], 0)
+        self.snapshot["projects"][0]["governed"] = {"available": False, "reason": "no local ledger", "change_sets": []}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertFalse(view["items"][0]["governed"]["available"])
+        self.assertEqual(view["items"][0]["governed"]["change_sets"], [])
+
+    def test_an_unknown_generation_contract_is_its_own_state(self):
+        self.snapshot["generator_contract"] = "ragbaz.daily-agenda.generator.v9"
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "contract-mismatch")
+        self.assertEqual(view["generator_contract"], "ragbaz.daily-agenda.generator.v9")
+        self.assertIn("ragbaz.daily-agenda.generator.v1", view["supported_contracts"])
+        self.assertEqual(view["items"], [])
+        # A damaged edition is still a different fault from an unreadable contract.
+        self.snapshot["generator_contract"] = "ragbaz.daily-agenda.generator.v1"
+        self.write_edition()
+        (self.directory / "snapshot.json").write_text("{")
+        self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
+    def test_an_edition_without_a_contract_is_still_served(self):
+        self.snapshot.pop("generator_contract", None)
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertEqual(view["generator_contract"], None)
+
+    def test_the_generator_revision_is_validated_and_projected(self):
+        self.snapshot["generator"] = {"revision": "a" * 40, "dirty": True}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertEqual(view["generator"], {"revision": "a" * 40, "dirty": True})
+        for mutation in (
+            lambda g: g.update(revision="not-a-sha"),
+            lambda g: g.update(revision="a" * 39),
+            lambda g: g.update(dirty="yes"),
+            lambda g: g.update(extra="ignored-or-not"),
+        ):
+            self.snapshot["generator"] = {"revision": "a" * 40, "dirty": True}
+            mutation(self.snapshot["generator"])
+            self.write_edition()
+            self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
+    def test_model_provenance_is_bounded_and_does_not_expose_endpoint(self):
+        self.snapshot["generation"] = {"provider": "ollama-local", "model": "qwen2.5:3b",
+            "model_digest": "sha256:" + "a" * 64, "network": "offline", "status": "ready",
+            "summary": "Inspect the native records <script>untrusted text</script>",
+            "reason": "Local data only", "endpoint": "http://localhost/private"}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["generation"]["model"], "qwen2.5:3b")
+        self.assertEqual(view["generation"]["network"], "offline")
+        self.assertNotIn("endpoint", view["generation"])
+        self.snapshot["generation"]["provider"] = "unknown"
+        self.write_edition()
+        self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
     def test_failed_or_mixed_generation_never_exposes_partial_data(self):
         (self.directory / "snapshot.json").write_text("{}")
         view = gw.v1_daily_agenda(self.cfg)
@@ -161,13 +252,52 @@ class AgendaTests(unittest.TestCase):
         fake = self.directory / "podman"
         fake.write_text('#!/bin/sh\nif [ "$1" = run ]; then printf "%s\\n" "$@"; fi\n')
         fake.chmod(0o755)
+        # The fixture image declares no agenda contract, so the launcher's
+        # pre-start check is opted out of here; it has its own tests below.
         result = subprocess.run(["bash", str(ROOT / "deploy/podman/rebekah-run")], capture_output=True, text=True,
             env={**os.environ, "PATH": str(self.directory) + ":" + os.environ["PATH"],
+                 "REBEKAH_SKIP_CONTRACT_CHECK": "1",
                  "REBEKAH_IMAGE": "sha256:fixture", "REBEKAH_WORKSPACE": str(ROOT),
                  "REBEKAH_ENV_FILE": str(self.directory / "none"), "REBEKAH_DAILY_AGENDA_HOST_DIR": str(self.directory)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"type=bind,src={self.directory},dst=/run/daily-agenda,ro", result.stdout)
         self.assertIn("REBEKAH_DAILY_AGENDA_DIR=/run/daily-agenda", result.stdout)
+
+    def _launch(self, **extra):
+        """Run the launcher with a stub podman that reports a fixture image."""
+        stub = self.directory / "podman"
+        # deploy-check inspects with `run --rm --entrypoint cat <image> <path>`;
+        # the launcher runs `run --rm --name <name> ...`. Only the former is
+        # made to fail, so the test exercises the check rather than the launch.
+        stub.write_text(
+            '#!/bin/sh\n'
+            'for arg in "$@"; do [ "$arg" = --entrypoint ] && exit "${STUB_IMAGE_READ:-0}"; done\n'
+            'if [ "$1" = run ]; then printf "LAUNCHED\\n"; fi\n'
+            'exit 0\n')
+        stub.chmod(0o755)
+        checker = ROOT / "tests/deploy-check.py"
+        self.assertTrue(checker.is_file(), "deploy-check.py must ship with the repository")
+        return subprocess.run(["bash", str(ROOT / "deploy/podman/rebekah-run")], capture_output=True, text=True,
+            env={**os.environ, "PATH": str(self.directory) + ":" + os.environ["PATH"],
+                 "REBEKAH_IMAGE": "sha256:fixture", "REBEKAH_WORKSPACE": str(ROOT),
+                 "REBEKAH_DAILY_AGENDA_HOST_DIR": str(self.directory), **extra})
+
+    def test_launcher_refuses_an_image_whose_contract_cannot_be_read(self):
+        # deploy-check exits 2 when it cannot inspect the image at all.
+        result = self._launch(STUB_IMAGE_READ="2")
+        self.assertEqual(result.returncode, 0, "an uninspectable image must not block a launch")
+        self.assertIn("LAUNCHED", result.stdout)
+        self.assertIn("could not inspect", result.stderr)
+
+    def test_launcher_runs_the_contract_check_only_when_an_agenda_is_mounted(self):
+        stub = self.directory / "podman"
+        stub.write_text('#!/bin/sh\nif [ "$1" = run ]; then printf "LAUNCHED\\n"; fi\nexit 0\n')
+        stub.chmod(0o755)
+        no_agenda = subprocess.run(["bash", str(ROOT / "deploy/podman/rebekah-run")], capture_output=True, text=True,
+            env={**os.environ, "PATH": str(self.directory) + ":" + os.environ["PATH"],
+                 "REBEKAH_IMAGE": "sha256:" + "0" * 64, "REBEKAH_WORKSPACE": str(ROOT)})
+        self.assertEqual(no_agenda.returncode, 0, no_agenda.stderr)
+        self.assertNotIn("contract", no_agenda.stderr.lower())
 
 
 if __name__ == "__main__":

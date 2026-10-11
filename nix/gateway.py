@@ -209,10 +209,31 @@ class Config:
         self.dash_push_key = env.get("REBEKAH_DASH_PUSH_KEY", "").strip()
         self.dash_poll = _int_env(env, "REBEKAH_DASH_POLL_INTERVAL", 30)
         self.dash_heartbeat = _int_env(env, "REBEKAH_DASH_PUSH_INTERVAL", 300)
+        # Extra push targets ("mirrors"): a local Dash next to production or,
+        # later, many. Comma-separated url|key pairs; neither the key alphabet
+        # (rbkp_...) nor a plain origin contains "," or "|", so both are safe
+        # separators. Mirrors receive every view and answer refresh polls, but
+        # never take commands: a click on a test Dash must not move the real
+        # instance (see DashPusher commands=False).
+        self.dash_mirrors = []
+        for entry in env.get("REBEKAH_DASH_MIRRORS", "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            url, sep, key = entry.partition("|")
+            self.dash_mirrors.append((url.strip().rstrip("/"), key.strip()) if sep else (entry, ""))
 
     @property
     def dash_enabled(self):
-        return bool(self.dash_url or self.dash_push_key)
+        return bool(self.dash_url or self.dash_push_key or self.dash_mirrors)
+
+    @property
+    def dash_targets(self):
+        """(url, key) pairs, primary first: one pusher thread each."""
+        targets = []
+        if self.dash_url and self.dash_push_key:
+            targets.append((self.dash_url, self.dash_push_key))
+        return targets + self.dash_mirrors
 
     @property
     def tls_enabled(self):
@@ -604,6 +625,10 @@ def runtime_snapshot(path):
 AGENDA_MAX_FILE = 1024 * 1024
 AGENDA_MAX_VIEW = 384 * 1024
 AGENDA_MAX_AGE = 24 * 3600
+# Generation contracts this build understands. An edition carrying any other
+# value is readable but not projectable here, which is a different fault from a
+# damaged edition and must not be reported as one.
+AGENDA_CONTRACTS = {"ragbaz.daily-agenda.generator.v1"}
 
 
 def _agenda_file(directory, name, maximum=AGENDA_MAX_FILE):
@@ -635,6 +660,78 @@ def _agenda_time(value):
     return stamp
 
 
+def _agenda_count(value):
+    """A non-negative integer, never a bool masquerading as a count."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100000:
+        raise ValueError("invalid agenda count")
+    return value
+
+
+def _agenda_generator(value):
+    """The revision that produced an edition: a commit, and whether it was dirty.
+
+    An edition predating this field yields None rather than an error; the
+    revision is provenance, not something the projection depends on.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("invalid agenda generator record")
+    if set(value) - {"revision", "dirty"}:
+        # An unknown key means the edition carries provenance this reader does
+        # not understand. Reporting ready would repeat the silent-drift failure
+        # the contract check exists to catch.
+        raise ValueError("unknown agenda generator fields")
+    revision = value.get("revision")
+    if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(revision)):
+        raise ValueError("invalid agenda generator revision")
+    dirty = value.get("dirty")
+    if dirty is not None and not isinstance(dirty, bool):
+        raise ValueError("invalid agenda generator dirty flag")
+    return {"revision": revision, "dirty": dirty}
+
+
+def _agenda_governed(value):
+    """Project bounded WeftMark change sets; an absent ledger is not an error.
+
+    Governed work is recorded state, so a malformed record must fail the whole
+    edition rather than silently present a repository as having no change sets.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("available"), bool):
+        raise ValueError("invalid agenda governed state")
+    available = value["available"]
+    reason = "" if available else _agenda_text(value.get("reason"), 200)
+    if not available and not reason:
+        raise ValueError("unavailable governed state needs a reason")
+    if not available:
+        return {"available": False, "reason": reason, "change_sets": []}
+    sets = value.get("change_sets")
+    if not isinstance(sets, list) or len(sets) > 20:
+        raise ValueError("invalid agenda change sets")
+    projected = []
+    for change in sets:
+        if not isinstance(change, dict):
+            raise ValueError("invalid agenda change set")
+        identifier = _agenda_text(change.get("id"), 120)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", identifier):
+            raise ValueError("invalid change set id")
+        observed_at = change.get("observed_at")
+        projected.append({
+            "id": identifier, "goal": _agenda_text(change.get("goal"), 400),
+            "state": _agenda_text(change.get("state"), 40), "readiness": _agenda_text(change.get("readiness"), 40),
+            "branch": _agenda_text(change.get("branch"), 200), "head": _agenda_text(change.get("head"), 64),
+            "observed_at": observed_at if observed_at is None else _agenda_time(observed_at).isoformat(),
+            "evidence_current": _agenda_count(change.get("evidence_current")),
+            "evidence_failed": _agenda_count(change.get("evidence_failed")),
+            "evidence_obsolete": _agenda_count(change.get("evidence_obsolete")),
+            "dirty_paths": _agenda_count(change.get("dirty_paths")),
+            "scope_collisions": _agenda_count(change.get("scope_collisions")),
+        })
+    return {"available": True, "reason": "", "change_sets": projected}
+
+
 def v1_daily_agenda(cfg):
     """Project the generated edition, never its HTML or workstation file links.
 
@@ -645,7 +742,10 @@ def v1_daily_agenda(cfg):
             "observed_at": _iso_now(), "status": "not-configured", "stale": True,
             "source_observed_at": None, "generated_at": None, "generation_id": None,
             "window_start": None, "window_end": None, "ranking": None,
-            "collection_error_count": 0, "items": []}
+            "collection_error_count": 0, "generation": None,
+            "generator_contract": None, "supported_contracts": sorted(AGENDA_CONTRACTS),
+            "generator": None,
+            "items": []}
     directory = cfg.daily_agenda_dir
     if not directory:
         return base
@@ -663,6 +763,14 @@ def v1_daily_agenda(cfg):
         snapshot, editorial = documents["snapshot.json"], documents["editorial.json"]
         if snapshot.get("schema") != "ragbaz.daily-agenda.v1" or editorial.get("schema") != "ragbaz.daily-agenda-editorial.v1":
             raise ValueError("unknown agenda source schema")
+        # A readable edition this build cannot interpret. Report it as its own
+        # state: the artifact is intact, the reader is behind. An edition from
+        # before contracts existed predates the field and is still served.
+        contract = snapshot.get("generator_contract", manifest.get("generator_contract"))
+        if contract is not None and contract not in AGENDA_CONTRACTS:
+            return {**base, "status": "contract-mismatch", "stale": True,
+                    "generator_contract": _agenda_text(contract, 120),
+                    "supported_contracts": sorted(AGENDA_CONTRACTS)}
         observed = _agenda_time(snapshot["observed_at"])
         if manifest["observed_at"] != snapshot["observed_at"]:
             raise ValueError("mixed agenda generation")
@@ -723,12 +831,24 @@ def v1_daily_agenda(cfg):
                 "recent_work": _agenda_text(project["commits"][0]["subject"] if count else "No commits in the window", 400),
                 "next_move": _agenda_text(next_move or "Inspect the project plan and record a bounded next task", 400),
                 "note": _agenda_text(config.get("fallback") if not own else "", 3000),
+                "governed": _agenda_governed(project.get("governed")),
                 "tasks_truncated": len(own) > 40, "tasks": projected_tasks, "concepts": concepts})
+        generation = snapshot.get("generation")
+        if generation is not None:
+            if (not isinstance(generation, dict) or generation.get("provider") not in ("none", "ollama-local", "opencode-hosted")
+                    or generation.get("network") not in ("online", "offline")
+                    or generation.get("status") not in ("ready", "fallback")):
+                raise ValueError("invalid agenda generation provenance")
+            generation = {key: _agenda_text(generation.get(key), limit) for key, limit in (
+                ("provider", 40), ("model", 200), ("model_digest", 100), ("network", 20),
+                ("status", 40), ("summary", 4000), ("reason", 400))}
         result = {**base, "status": "ready", "stale": (now - observed).total_seconds() > AGENDA_MAX_AGE,
                   "source_observed_at": snapshot["observed_at"], "generated_at": generated_at,
                   "generation_id": _agenda_text(manifest["id"], 120), "window_start": snapshot["window_start"],
                   "window_end": snapshot["window_end"], "ranking": _agenda_text(snapshot["ranking"], 400),
-                  "collection_error_count": len(snapshot.get("errors", [])), "items": items}
+                   "generator_contract": contract,
+                   "generator": _agenda_generator(snapshot.get("generator")),
+                   "collection_error_count": len(snapshot.get("errors", [])), "generation": generation, "items": items}
         if len(json.dumps(result).encode()) > AGENDA_MAX_VIEW:
             raise ValueError("oversized agenda projection")
         return result
@@ -955,6 +1075,8 @@ def v1_oversight(cfg):
 
 COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+CHAIN_ENTRY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+CHAIN_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 CHANGE_SET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 QUEUE_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 ACTOR_RE = re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}$")
@@ -963,6 +1085,25 @@ COMMAND_KINDS = ("oversight.decide", "oversight.defer", "oversight.escalate", "r
 
 def _reason(value, limit=2000):
     return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
+
+
+def _chain_link(action):
+    """The chain entry a decision recorded, if both halves are well formed.
+
+    A decided action carries `decision_evidence.{entry_id,hash}`. Dash holds the
+    entry so the command id, the decision and the audit entry reconcile later;
+    a missing or malformed pair is dropped rather than reported half-formed.
+    """
+    evidence = action.get("decision_evidence") if isinstance(action, dict) else None
+    if not isinstance(evidence, dict):
+        return None, None
+    entry_id = evidence.get("entry_id")
+    chain_hash = evidence.get("hash")
+    if not isinstance(entry_id, str) or not CHAIN_ENTRY_RE.match(entry_id):
+        return None, None
+    if not isinstance(chain_hash, str) or not CHAIN_HASH_RE.match(chain_hash):
+        return None, None
+    return entry_id, chain_hash
 
 
 def _nostoi_event(cfg, *, kind, actor, subject, body):
@@ -1148,6 +1289,9 @@ def apply_command(cfg, command, now_ms=None):
         path = "/oversight/escalate"
         body = {"request_id": request_id, "target_queue": queue,
                 "rationale": "%s (escalated by %s)" % (rationale, actor)}
+    # The command id travels with the decision so the eventual audit entry can be
+    # linked back to the Dash command that caused it.
+    body["external_ref"] = cid
 
     try:
         intent = _decision_intent(
@@ -1173,6 +1317,11 @@ def apply_command(cfg, command, now_ms=None):
         action = ((reply or {}).get("result") or {}).get("action")
         if isinstance(action, dict):
             result.update(ok=True, outcome=_text(action.get("status"), 40))
+            if kind == "oversight.decide":
+                entry_id, chain_hash = _chain_link(action)
+                if entry_id:
+                    result["chain_entry_id"] = entry_id
+                    result["chain_hash"] = chain_hash
         elif reply is None:
             result["error"] = "ephor_unreachable"
         elif ((reply.get("error") or {}).get("code")) == -32010:
@@ -1183,9 +1332,16 @@ def apply_command(cfg, command, now_ms=None):
         return result
 
     status, data = internal_json(cfg, "ephor", "POST", path, body,
-                                 bearer=cfg.ephor_oversight_token)
+                                 bearer=cfg.ephor_oversight_token,
+                                 headers={"Idempotency-Key": "dash-" + cid})
     if status == 200 and isinstance(data, dict):
-        result.update(ok=True, outcome=_text((data.get("action") or {}).get("status"), 40))
+        action = data.get("action")
+        result.update(ok=True, outcome=_text((action or {}).get("status"), 40))
+        if kind == "oversight.decide":
+            entry_id, chain_hash = _chain_link(action)
+            if entry_id:
+                result["chain_entry_id"] = entry_id
+                result["chain_hash"] = chain_hash
     elif status in (401, 403):
         result["error"] = "ephor_refused_credential"
     else:
@@ -1670,8 +1826,10 @@ def make_handler(cfg, auth):
 # the same three /api/v1 payloads the gateway serves, whenever they change and
 # at least every REBEKAH_DASH_PUSH_INTERVAL seconds, and polls Dash every
 # REBEKAH_DASH_POLL_INTERVAL seconds for a "refresh requested" flag (someone
-# clicked Refresh in Dash), pushing at once when it is set. Holds have
-# deadlines: with Ephor enabled it looks for new ones every DASH_WATCH seconds
+# clicked Refresh in Dash), pushing at once when it is set. REBEKAH_DASH_MIRRORS
+# adds further url|key targets (a local Dash next to production, or many):
+# one thread each, same views, but mirrors never take commands, so a click on
+# a test Dash cannot move the real instance. Holds have deadlines: with Ephor enabled it looks for new ones every DASH_WATCH seconds
 # and pushes them at once, and it polls as often as Dash's poll_interval asks
 # (down to DASH_MIN_POLL) while a hold waits or a decision is on its way. Nothing listens:
 # no inbound port is opened. The push key is sent only in the Authorization
@@ -1693,21 +1851,43 @@ DASH_WATCH = 5
 DASH_MIN_POLL = 5
 
 
+def _dash_endpoint_problems(url, key):
+    """Per-target URL/key rules, shared by the primary pair and mirrors."""
+    problems = []
+    if not (url and key):
+        problems.append("need both a URL and a push key (url|key)")
+        return problems
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "http" and host in LOOPBACK:
+        pass  # a local Dash (wrangler dev) or a test double
+    elif parts.scheme != "https":
+        problems.append("URL must be https:// (plain http only to loopback)")
+    if not host or parts.username or parts.password or parts.query or parts.fragment:
+        problems.append("URL must be a plain origin, e.g. https://dash.ragbaz.cc")
+    if not DASH_PUSH_KEY_RE.match(key):
+        problems.append("push key is not a Dash push key (rbkp_...)")
+    return problems
+
+
 def dash_problems(cfg):
     problems = []
-    if not (cfg.dash_url and cfg.dash_push_key):
-        problems.append("set both REBEKAH_DASH_URL and REBEKAH_DASH_PUSH_KEY, or neither")
-        return problems
-    url = urllib.parse.urlsplit(cfg.dash_url)
-    host = (url.hostname or "").lower()
-    if url.scheme == "http" and host in LOOPBACK:
-        pass  # a local Dash (wrangler dev) or a test double
-    elif url.scheme != "https":
-        problems.append("REBEKAH_DASH_URL must be https:// (plain http only to loopback)")
-    if not host or url.username or url.password or url.query or url.fragment:
-        problems.append("REBEKAH_DASH_URL must be a plain origin, e.g. https://dash.ragbaz.cc")
-    if not DASH_PUSH_KEY_RE.match(cfg.dash_push_key):
-        problems.append("REBEKAH_DASH_PUSH_KEY is not a Dash push key (rbkp_...)")
+    if cfg.dash_url or cfg.dash_push_key:
+        if not (cfg.dash_url and cfg.dash_push_key):
+            problems.append("set both REBEKAH_DASH_URL and REBEKAH_DASH_PUSH_KEY, or neither")
+            return problems
+        url = urllib.parse.urlsplit(cfg.dash_url)
+        host = (url.hostname or "").lower()
+        if url.scheme == "http" and host in LOOPBACK:
+            pass  # a local Dash (wrangler dev) or a test double
+        elif url.scheme != "https":
+            problems.append("REBEKAH_DASH_URL must be https:// (plain http only to loopback)")
+        if not host or url.username or url.password or url.query or url.fragment:
+            problems.append("REBEKAH_DASH_URL must be a plain origin, e.g. https://dash.ragbaz.cc")
+        if not DASH_PUSH_KEY_RE.match(cfg.dash_push_key):
+            problems.append("REBEKAH_DASH_PUSH_KEY is not a Dash push key (rbkp_...)")
+    for i, (url, key) in enumerate(cfg.dash_mirrors, 1):
+        problems.extend("mirror %d: %s" % (i, p) for p in _dash_endpoint_problems(url, key))
     if cfg.dash_poll < 10:
         problems.append("REBEKAH_DASH_POLL_INTERVAL must be an integer >= 10 (seconds)")
     if cfg.dash_heartbeat < max(cfg.dash_poll, 10):
@@ -1716,14 +1896,23 @@ def dash_problems(cfg):
 
 
 class DashPusher:
-    """Push this instance's /api/v1 views to Dash; see the section comment."""
+    """Push this instance's /api/v1 views to Dash; see the section comment.
 
-    def __init__(self, cfg, auth, clock=time.monotonic, log=None):
+    target overrides the primary (url, key) pair from cfg for a mirror, and
+    commands=False makes it push-and-poll only: mirrors answer refresh polls
+    but never take commands, so a click on a test Dash cannot move the real
+    instance.
+    """
+
+    def __init__(self, cfg, auth, clock=time.monotonic, log=None, target=None, commands=True):
         self.cfg = cfg
         self.auth = auth
         self.clock = clock
         self.log = log or (lambda msg: sys.stderr.write("rebekah-gateway: dash: " + msg + "\n"))
-        url = urllib.parse.urlsplit(cfg.dash_url)
+        url_str, self._dash_key = target if target is not None else (cfg.dash_url, cfg.dash_push_key)
+        self._dash_url = url_str
+        self.commands = commands
+        url = urllib.parse.urlsplit(url_str or "")
         self._https = url.scheme == "https"
         self._host = url.hostname
         self._port = url.port or (443 if self._https else 80)
@@ -1811,7 +2000,7 @@ class DashPusher:
     def _call(self, method, path, body=None):
         """(status, parsed JSON or None, Retry-After seconds or None). Raises OSError."""
         headers = {
-            "Authorization": "Bearer " + self.cfg.dash_push_key,
+            "Authorization": "Bearer " + self._dash_key,
             "Accept": "application/json",
             "User-Agent": "rebekah-gateway/dash-push",
         }
@@ -1886,16 +2075,19 @@ class DashPusher:
         self.failures = 0
         self.poll_every = self._poll_interval(data)
         # A decision changes what the views show: push them again at once.
-        decided = self.take_commands(data)
-        self.report()
+        # Mirrors skip this whole branch: their Dash is a test surface whose
+        # decisions must never execute here (see commands=False).
+        decided = self.take_commands(data) if self.commands else False
+        if self.commands:
+            self.report()
         if due:
             self.last_digest = digest
             self.last_push = now
             self.refresh = bool((data or {}).get("refresh_requested")) or decided
-            self._note("ok", "pushing to %s" % self.cfg.dash_url)
+            self._note("ok", "pushing to %s" % self._dash_url)
             return 0 if decided else self._wait(now)
         self.refresh = bool((data or {}).get("refresh_requested")) or decided
-        self._note("ok", "pushing to %s" % self.cfg.dash_url)
+        self._note("ok", "pushing to %s" % self._dash_url)
         # Someone asked for fresh data: push now, not at the next poll.
         return 0 if self.refresh else self._wait(now)
 
@@ -1922,12 +2114,18 @@ class DashPusher:
                 delay = self._failed(type(exc).__name__)
 
 
-def start_dash_pusher(cfg, auth):
-    stop = threading.Event()
-    pusher = DashPusher(cfg, auth)
-    thread = threading.Thread(target=pusher.run, args=(stop,), name="dash-push", daemon=True)
-    thread.start()
-    return stop
+def start_dash_pushers(cfg, auth):
+    """One background thread per Dash target (primary first, then mirrors);
+    returns their stop events. Mirrors never take commands."""
+    stops = []
+    for i, target in enumerate(cfg.dash_targets):
+        stop = threading.Event()
+        pusher = DashPusher(cfg, auth, target=target, commands=(i == 0))
+        thread = threading.Thread(target=pusher.run, args=(stop,),
+                                  name="dash-push" if i == 0 else "dash-push-%d" % i, daemon=True)
+        thread.start()
+        stops.append(stop)
+    return stops
 
 
 def build_server(cfg, auth):
@@ -1969,10 +2167,10 @@ def main(argv=None):
     )
     httpd = build_server(cfg, auth)
     if cfg.dash_enabled:
-        start_dash_pusher(cfg, auth)
+        start_dash_pushers(cfg, auth)
         sys.stderr.write(
             "rebekah-gateway: pushing to %s every %ds (checks every %ds)\n"
-            % (cfg.dash_url, cfg.dash_heartbeat, cfg.dash_poll)
+            % (", ".join(url for url, _ in cfg.dash_targets), cfg.dash_heartbeat, cfg.dash_poll)
         )
     try:
         httpd.serve_forever()

@@ -96,6 +96,10 @@ class Dash(BaseHTTPRequestHandler):
 
 OVERSIGHT_TOKEN = "oversight-token-0123456789"
 WRITE_TOKEN = "weftmark-write-0123456789"
+# The audit chain entry a decided hold now carries back to the gateway, which
+# reports it to Dash so the command id and the entry reconcile.
+CHAIN_ENTRY_ID = "chain-e-0001"
+CHAIN_HASH = hashlib.sha256(b"rebekah-dash-push").hexdigest()
 
 
 class Ephor(BaseHTTPRequestHandler):
@@ -119,7 +123,8 @@ class Ephor(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-        Ephor.calls.append((self.path, self.headers.get("Authorization"), body))
+        Ephor.calls.append((self.path, self.headers.get("Authorization"), body,
+                            self.headers.get("Idempotency-Key")))
         if self.path == "/oversight/list":
             items = [h for h in Ephor.holds.values() if h["status"] == body.get("status")]
             return self._send(200, {"items": items, "total": len(items), "next_cursor": None})
@@ -129,7 +134,8 @@ class Ephor(BaseHTTPRequestHandler):
         if hold is None:
             return self._send(400, {"error": "Approval request not found"})
         if self.path == "/oversight/decide":
-            hold.update(status=body["decision"], reviewer=body["reviewer"], rationale=body["rationale"])
+            hold.update(status=body["decision"], reviewer=body["reviewer"], rationale=body["rationale"],
+                        decision_evidence={"entry_id": CHAIN_ENTRY_ID, "hash": CHAIN_HASH, "accepted": True})
         elif self.path == "/oversight/defer":
             hold["deadline_ms"] += body["defer_ms"]
         elif self.path == "/oversight/escalate":
@@ -180,7 +186,9 @@ class Gate(socketserver.StreamRequestHandler):
             reply = {"result": {"action": Gate.holds[rid]}}
         elif method == "oversight.decide":
             Gate.holds[rid].update(status={"approve": "approved", "deny": "denied"}[params["decision"]],
-                                   reviewer=params["reviewer"])
+                                   reviewer=params["reviewer"],
+                                   decision_evidence={"entry_id": CHAIN_ENTRY_ID, "hash": CHAIN_HASH,
+                                                      "accepted": True})
             reply = {"result": {"action": Gate.holds[rid]}}
         else:
             reply = {"error": {"code": -32601, "message": "method not found"}}
@@ -557,10 +565,12 @@ class DecisionsTest(unittest.TestCase):
                    "params": {"request_id": "g1", "decision": "approved", "rationale": "Handoff is fine."}})
         self.clock.t += 30
         pusher.step()
-        self.assertEqual(self.results()[-1], [{"id": "cmd-2000001", "ok": True, "outcome": "approved"}])
+        self.assertEqual(self.results()[-1], [{"id": "cmd-2000001", "ok": True, "outcome": "approved",
+                                               "chain_entry_id": CHAIN_ENTRY_ID, "chain_hash": CHAIN_HASH}])
         decide = [p for m, p in Gate.calls if m == "oversight.decide"]
         self.assertEqual(len(decide), 1)
         self.assertEqual((decide[0]["decision"], decide[0]["reviewer"]), ("approve", "ada@example.com"))
+        self.assertEqual(decide[0]["external_ref"], "cmd-2000001", "the command id rides with the decision")
         self.assertEqual([c for c in Ephor.calls if c[0] == "/oversight/decide"], [], "not the bridge's")
         self.assertFalse(any(GATE_TOKEN in m for m in self.logs))
 
@@ -593,7 +603,10 @@ class DecisionsTest(unittest.TestCase):
         self.assertEqual(Ephor.holds["h1"]["reviewer"], "ada@example.com")
         decide = [c for c in Ephor.calls if c[0] == "/oversight/decide"]
         self.assertEqual(decide[0][1], "Bearer " + OVERSIGHT_TOKEN)
-        self.assertEqual(self.results()[-1], [{"id": "cmd-0000001", "ok": True, "outcome": "approved"}])
+        self.assertEqual(decide[0][2]["external_ref"], "cmd-0000001", "the command id rides with the decision")
+        self.assertEqual(decide[0][3], "dash-cmd-0000001", "the decision is idempotent at the bridge")
+        self.assertEqual(self.results()[-1], [{"id": "cmd-0000001", "ok": True, "outcome": "approved",
+                                               "chain_entry_id": CHAIN_ENTRY_ID, "chain_hash": CHAIN_HASH}])
         self.pusher.step()
         self.assertEqual(Dash.requests[-1]["path"], "/api/connector/push")
         self.assertEqual(Dash.requests[-1]["body"]["views"]["oversight"]["items"], [], "no longer pending")
@@ -644,6 +657,36 @@ class DecisionsTest(unittest.TestCase):
         self.assertTrue(by_id["cmd-0000006"]["ok"])
         self.assertEqual(Ephor.holds["h2"]["target_queue"], "security")
         self.assertEqual(by_id["cmd-0000007"], {"id": "cmd-0000007", "ok": False, "error": "not_pending", "outcome": "denied"})
+        self.assertEqual([c for c in Ephor.calls if c[0] == "/oversight/defer"][0][2]["external_ref"], "cmd-0000005")
+        self.assertEqual([c for c in Ephor.calls if c[0] == "/oversight/escalate"][0][2]["external_ref"], "cmd-0000006")
+        self.assertNotIn("chain_entry_id", by_id["cmd-0000005"], "only a decision resolves to a chain entry")
+        self.assertNotIn("chain_entry_id", by_id["cmd-0000006"])
+
+    def test_a_malformed_chain_link_is_dropped_not_reported(self):
+        # A decision whose audit entry comes back half-formed is still applied
+        # and reported, just without a chain link for Dash to hold.
+        cfg = config(EPHOR_PORT=str(EPHOR_PORT), EPHOR_OVERSIGHT_TOKEN=OVERSIGHT_TOKEN,
+                     REBEKAH_EPHOR_STATE="enabled")
+        cfg.nostoi_writer = self.capture_audit
+
+        def internal(_cfg, _name, method, _path, _body=None, **_kwargs):
+            if method == "GET":
+                return 200, {"action": hold("h-bad-chain")}
+            return 200, {"action": {"status": "approved",
+                                    "decision_evidence": {"entry_id": "bad id!", "hash": CHAIN_HASH}}}
+
+        command = {"id": "cmd-0000888", "kind": "oversight.decide",
+                   "requested_by": "ada@example.com",
+                   "params": {"request_id": "h-bad-chain", "decision": "approved",
+                              "rationale": "reviewed"}}
+        old = gw.internal_json
+        gw.internal_json = internal
+        try:
+            result = gw.apply_command(cfg, command, now_ms=1_700_000_000_000)
+        finally:
+            gw.internal_json = old
+
+        self.assertEqual(result, {"id": "cmd-0000888", "ok": True, "outcome": "approved"})
 
     def test_a_review_is_recorded_in_weftmark_as_the_reviewer(self):
         self.give({"id": "cmd-0000008", "kind": "review.record", "requested_by": "ada@example.com",
