@@ -121,6 +121,44 @@ class AgendaTests(unittest.TestCase):
         self.assertFalse(view["items"][0]["governed"]["available"])
         self.assertEqual(view["items"][0]["governed"]["change_sets"], [])
 
+    def test_an_unknown_generation_contract_is_its_own_state(self):
+        self.snapshot["generator_contract"] = "ragbaz.daily-agenda.generator.v9"
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "contract-mismatch")
+        self.assertEqual(view["generator_contract"], "ragbaz.daily-agenda.generator.v9")
+        self.assertIn("ragbaz.daily-agenda.generator.v1", view["supported_contracts"])
+        self.assertEqual(view["items"], [])
+        # A damaged edition is still a different fault from an unreadable contract.
+        self.snapshot["generator_contract"] = "ragbaz.daily-agenda.generator.v1"
+        self.write_edition()
+        (self.directory / "snapshot.json").write_text("{")
+        self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
+    def test_an_edition_without_a_contract_is_still_served(self):
+        self.snapshot.pop("generator_contract", None)
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertEqual(view["generator_contract"], None)
+
+    def test_the_generator_revision_is_validated_and_projected(self):
+        self.snapshot["generator"] = {"revision": "a" * 40, "dirty": True}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertEqual(view["generator"], {"revision": "a" * 40, "dirty": True})
+        for mutation in (
+            lambda g: g.update(revision="not-a-sha"),
+            lambda g: g.update(revision="a" * 39),
+            lambda g: g.update(dirty="yes"),
+            lambda g: g.update(extra="ignored-or-not"),
+        ):
+            self.snapshot["generator"] = {"revision": "a" * 40, "dirty": True}
+            mutation(self.snapshot["generator"])
+            self.write_edition()
+            self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
     def test_model_provenance_is_bounded_and_does_not_expose_endpoint(self):
         self.snapshot["generation"] = {"provider": "ollama-local", "model": "qwen2.5:3b",
             "model_digest": "sha256:" + "a" * 64, "network": "offline", "status": "ready",

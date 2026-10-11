@@ -625,6 +625,10 @@ def runtime_snapshot(path):
 AGENDA_MAX_FILE = 1024 * 1024
 AGENDA_MAX_VIEW = 384 * 1024
 AGENDA_MAX_AGE = 24 * 3600
+# Generation contracts this build understands. An edition carrying any other
+# value is readable but not projectable here, which is a different fault from a
+# damaged edition and must not be reported as one.
+AGENDA_CONTRACTS = {"ragbaz.daily-agenda.generator.v1"}
 
 
 def _agenda_file(directory, name, maximum=AGENDA_MAX_FILE):
@@ -661,6 +665,30 @@ def _agenda_count(value):
     if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100000:
         raise ValueError("invalid agenda count")
     return value
+
+
+def _agenda_generator(value):
+    """The revision that produced an edition: a commit, and whether it was dirty.
+
+    An edition predating this field yields None rather than an error; the
+    revision is provenance, not something the projection depends on.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("invalid agenda generator record")
+    if set(value) - {"revision", "dirty"}:
+        # An unknown key means the edition carries provenance this reader does
+        # not understand. Reporting ready would repeat the silent-drift failure
+        # the contract check exists to catch.
+        raise ValueError("unknown agenda generator fields")
+    revision = value.get("revision")
+    if revision is not None and not re.fullmatch(r"[0-9a-f]{40}", str(revision)):
+        raise ValueError("invalid agenda generator revision")
+    dirty = value.get("dirty")
+    if dirty is not None and not isinstance(dirty, bool):
+        raise ValueError("invalid agenda generator dirty flag")
+    return {"revision": revision, "dirty": dirty}
 
 
 def _agenda_governed(value):
@@ -714,7 +742,10 @@ def v1_daily_agenda(cfg):
             "observed_at": _iso_now(), "status": "not-configured", "stale": True,
             "source_observed_at": None, "generated_at": None, "generation_id": None,
             "window_start": None, "window_end": None, "ranking": None,
-            "collection_error_count": 0, "generation": None, "items": []}
+            "collection_error_count": 0, "generation": None,
+            "generator_contract": None, "supported_contracts": sorted(AGENDA_CONTRACTS),
+            "generator": None,
+            "items": []}
     directory = cfg.daily_agenda_dir
     if not directory:
         return base
@@ -732,6 +763,14 @@ def v1_daily_agenda(cfg):
         snapshot, editorial = documents["snapshot.json"], documents["editorial.json"]
         if snapshot.get("schema") != "ragbaz.daily-agenda.v1" or editorial.get("schema") != "ragbaz.daily-agenda-editorial.v1":
             raise ValueError("unknown agenda source schema")
+        # A readable edition this build cannot interpret. Report it as its own
+        # state: the artifact is intact, the reader is behind. An edition from
+        # before contracts existed predates the field and is still served.
+        contract = snapshot.get("generator_contract", manifest.get("generator_contract"))
+        if contract is not None and contract not in AGENDA_CONTRACTS:
+            return {**base, "status": "contract-mismatch", "stale": True,
+                    "generator_contract": _agenda_text(contract, 120),
+                    "supported_contracts": sorted(AGENDA_CONTRACTS)}
         observed = _agenda_time(snapshot["observed_at"])
         if manifest["observed_at"] != snapshot["observed_at"]:
             raise ValueError("mixed agenda generation")
@@ -807,6 +846,8 @@ def v1_daily_agenda(cfg):
                   "source_observed_at": snapshot["observed_at"], "generated_at": generated_at,
                   "generation_id": _agenda_text(manifest["id"], 120), "window_start": snapshot["window_start"],
                   "window_end": snapshot["window_end"], "ranking": _agenda_text(snapshot["ranking"], 400),
+                   "generator_contract": contract,
+                   "generator": _agenda_generator(snapshot.get("generator")),
                    "collection_error_count": len(snapshot.get("errors", [])), "generation": generation, "items": items}
         if len(json.dumps(result).encode()) > AGENDA_MAX_VIEW:
             raise ValueError("oversized agenda projection")

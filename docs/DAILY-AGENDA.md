@@ -65,6 +65,38 @@ retries. Collect local data without waiting for network-online. Cache weights,
 bound local inference, mark missing sources and retain original observation times
 when re-rendering. The outbound Dash pusher retries independently of generation.
 
+## Contract and revision identity
+
+An edition names the generation contract it was written under, and the commit
+that wrote it. `AGENDA_CONTRACTS` in the gateway lists the contracts that build
+understands. When the two disagree the view reports `contract-mismatch`, naming
+both the edition's contract and the supported ones — never `unavailable`, which
+means a damaged artifact. An edition written before contracts existed has no
+field and is still served.
+
+The generator's commit and whether its tree was dirty travel in `generator`.
+This is provenance, not a dependency: a missing or unreadable revision never
+fails a projection, but a malformed one does, because a reader that silently
+accepted unknown fields is what let a stale gateway look healthy.
+
+### Before deploying
+
+```sh
+python3 tests/deploy-check.py
+```
+
+Compares the running instance against the source: container health, the
+contracts each side accepts, and the digest of the gateway in the image. It
+exists because tests exercise the *source* while the *running* image can be
+older — a mismatch that passed a full suite once already. It only inspects; it
+never rebuilds, restarts or deploys. Run it as the user owning the container:
+
+```sh
+sudo -u baz0 env XDG_RUNTIME_DIR=/run/user/1001 \
+  REBEKAH_NAME=baz0 REBEKAH_DAILY_AGENDA_DIR=/srv/ragbaz/reports/daily-agenda \
+  python3 tests/deploy-check.py
+```
+
 States: `ready`, `not-configured`, `unavailable`. An unavailable/malformed or
 mixed generation returns no project data. The gateway verifies snapshot/editorial
 bytes against the manifest, checks schema/time-window consistency, rejects
