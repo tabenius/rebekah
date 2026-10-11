@@ -645,7 +645,7 @@ def v1_daily_agenda(cfg):
             "observed_at": _iso_now(), "status": "not-configured", "stale": True,
             "source_observed_at": None, "generated_at": None, "generation_id": None,
             "window_start": None, "window_end": None, "ranking": None,
-            "collection_error_count": 0, "items": []}
+            "collection_error_count": 0, "generation": None, "items": []}
     directory = cfg.daily_agenda_dir
     if not directory:
         return base
@@ -724,11 +724,20 @@ def v1_daily_agenda(cfg):
                 "next_move": _agenda_text(next_move or "Inspect the project plan and record a bounded next task", 400),
                 "note": _agenda_text(config.get("fallback") if not own else "", 3000),
                 "tasks_truncated": len(own) > 40, "tasks": projected_tasks, "concepts": concepts})
+        generation = snapshot.get("generation")
+        if generation is not None:
+            if (not isinstance(generation, dict) or generation.get("provider") not in ("none", "ollama-local")
+                    or generation.get("network") not in ("online", "offline")
+                    or generation.get("status") not in ("ready", "fallback")):
+                raise ValueError("invalid agenda generation provenance")
+            generation = {key: _agenda_text(generation.get(key), limit) for key, limit in (
+                ("provider", 40), ("model", 200), ("model_digest", 100), ("network", 20),
+                ("status", 40), ("summary", 4000), ("reason", 400))}
         result = {**base, "status": "ready", "stale": (now - observed).total_seconds() > AGENDA_MAX_AGE,
                   "source_observed_at": snapshot["observed_at"], "generated_at": generated_at,
                   "generation_id": _agenda_text(manifest["id"], 120), "window_start": snapshot["window_start"],
                   "window_end": snapshot["window_end"], "ranking": _agenda_text(snapshot["ranking"], 400),
-                  "collection_error_count": len(snapshot.get("errors", [])), "items": items}
+                   "collection_error_count": len(snapshot.get("errors", [])), "generation": generation, "items": items}
         if len(json.dumps(result).encode()) > AGENDA_MAX_VIEW:
             raise ValueError("oversized agenda projection")
         return result
@@ -955,6 +964,8 @@ def v1_oversight(cfg):
 
 COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+CHAIN_ENTRY_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
+CHAIN_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 CHANGE_SET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 QUEUE_RE = re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 ACTOR_RE = re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}$")
@@ -963,6 +974,25 @@ COMMAND_KINDS = ("oversight.decide", "oversight.defer", "oversight.escalate", "r
 
 def _reason(value, limit=2000):
     return value.strip()[:limit] if isinstance(value, str) and value.strip() else None
+
+
+def _chain_link(action):
+    """The chain entry a decision recorded, if both halves are well formed.
+
+    A decided action carries `decision_evidence.{entry_id,hash}`. Dash holds the
+    entry so the command id, the decision and the audit entry reconcile later;
+    a missing or malformed pair is dropped rather than reported half-formed.
+    """
+    evidence = action.get("decision_evidence") if isinstance(action, dict) else None
+    if not isinstance(evidence, dict):
+        return None, None
+    entry_id = evidence.get("entry_id")
+    chain_hash = evidence.get("hash")
+    if not isinstance(entry_id, str) or not CHAIN_ENTRY_RE.match(entry_id):
+        return None, None
+    if not isinstance(chain_hash, str) or not CHAIN_HASH_RE.match(chain_hash):
+        return None, None
+    return entry_id, chain_hash
 
 
 def _nostoi_event(cfg, *, kind, actor, subject, body):
@@ -1148,6 +1178,9 @@ def apply_command(cfg, command, now_ms=None):
         path = "/oversight/escalate"
         body = {"request_id": request_id, "target_queue": queue,
                 "rationale": "%s (escalated by %s)" % (rationale, actor)}
+    # The command id travels with the decision so the eventual audit entry can be
+    # linked back to the Dash command that caused it.
+    body["external_ref"] = cid
 
     try:
         intent = _decision_intent(
@@ -1173,6 +1206,11 @@ def apply_command(cfg, command, now_ms=None):
         action = ((reply or {}).get("result") or {}).get("action")
         if isinstance(action, dict):
             result.update(ok=True, outcome=_text(action.get("status"), 40))
+            if kind == "oversight.decide":
+                entry_id, chain_hash = _chain_link(action)
+                if entry_id:
+                    result["chain_entry_id"] = entry_id
+                    result["chain_hash"] = chain_hash
         elif reply is None:
             result["error"] = "ephor_unreachable"
         elif ((reply.get("error") or {}).get("code")) == -32010:
@@ -1183,9 +1221,16 @@ def apply_command(cfg, command, now_ms=None):
         return result
 
     status, data = internal_json(cfg, "ephor", "POST", path, body,
-                                 bearer=cfg.ephor_oversight_token)
+                                 bearer=cfg.ephor_oversight_token,
+                                 headers={"Idempotency-Key": "dash-" + cid})
     if status == 200 and isinstance(data, dict):
-        result.update(ok=True, outcome=_text((data.get("action") or {}).get("status"), 40))
+        action = data.get("action")
+        result.update(ok=True, outcome=_text((action or {}).get("status"), 40))
+        if kind == "oversight.decide":
+            entry_id, chain_hash = _chain_link(action)
+            if entry_id:
+                result["chain_entry_id"] = entry_id
+                result["chain_hash"] = chain_hash
     elif status in (401, 403):
         result["error"] = "ephor_refused_credential"
     else:

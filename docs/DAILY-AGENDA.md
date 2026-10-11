@@ -54,6 +54,17 @@ widen other services' state-directory permissions to make this work.
 the connector must not rejuvenate old source evidence. Evidence older than 24
 hours is labeled stale; source failures have an explicit count.
 
+Editions may carry a bounded `generation` record: provider, model tag/digest,
+Internet status at generation, inference status, reason and plain-text editorial
+summary. Both consoles show the LLM used. Older editions remain readable and are
+labeled as lacking model provenance. `provider: none` means inference did not
+finish; never attribute a static fallback to a model that was only attempted.
+
+On the workspace host, use a persistent timer with a boot trigger and regular
+retries. Collect local data without waiting for network-online. Cache weights,
+bound local inference, mark missing sources and retain original observation times
+when re-rendering. The outbound Dash pusher retries independently of generation.
+
 States: `ready`, `not-configured`, `unavailable`. An unavailable/malformed or
 mixed generation returns no project data. The gateway verifies snapshot/editorial
 bytes against the manifest, checks schema/time-window consistency, rejects

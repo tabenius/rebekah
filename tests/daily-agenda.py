@@ -82,6 +82,20 @@ class AgendaTests(unittest.TestCase):
         self.assertEqual(view["source_observed_at"], old.isoformat())
         self.assertGreater(view["generated_at"], view["source_observed_at"])
 
+    def test_model_provenance_is_bounded_and_does_not_expose_endpoint(self):
+        self.snapshot["generation"] = {"provider": "ollama-local", "model": "qwen2.5:3b",
+            "model_digest": "sha256:" + "a" * 64, "network": "offline", "status": "ready",
+            "summary": "Inspect the native records <script>untrusted text</script>",
+            "reason": "Local data only", "endpoint": "http://localhost/private"}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["generation"]["model"], "qwen2.5:3b")
+        self.assertEqual(view["generation"]["network"], "offline")
+        self.assertNotIn("endpoint", view["generation"])
+        self.snapshot["generation"]["provider"] = "unknown"
+        self.write_edition()
+        self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
     def test_failed_or_mixed_generation_never_exposes_partial_data(self):
         (self.directory / "snapshot.json").write_text("{}")
         view = gw.v1_daily_agenda(self.cfg)

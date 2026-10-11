@@ -647,6 +647,14 @@
     }
     const stale = d.stale || Date.now() - Date.parse(d.source_observed_at) > 24 * 3600 * 1000;
     body.appendChild(el("p", stale ? "banner" : "status", (stale ? "Older than a daily checkpoint or marked stale. " : "") + "Git/Frog observed " + agendaTime(d.source_observed_at) + "; rendered " + agendaTime(d.generated_at) + "."));
+    const report = el("details", "agenda-report");
+    report.appendChild(el("summary", "", "Daily agent report · LLM: " + (d.generation?.model || "not recorded (legacy edition)")));
+    if (d.generation) {
+      report.appendChild(el("p", "hint", "Provider: " + d.generation.provider + " · Internet at generation: " + d.generation.network + " · " + d.generation.reason));
+      report.appendChild(el("p", "agenda-scope", d.generation.summary || "No LLM summary available; local evidence is shown below."));
+      report.appendChild(el("p", "hint", "Model-generated editorial; check against native records."));
+    }
+    body.appendChild(report);
     body.appendChild(el("p", "status", d.ranking + ". Window: " + agendaTime(d.window_start) + " — " + agendaTime(d.window_end) + ". Local counts are changed/untracked paths, not dated work."));
     if (d.collection_error_count) body.appendChild(el("p", "banner", "Incomplete collection: " + d.collection_error_count + " source failures."));
     const list = el("ol", "agenda-overview"); list.setAttribute("aria-label", "Active project agenda");
