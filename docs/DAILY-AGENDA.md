@@ -81,20 +81,29 @@ accepted unknown fields is what let a stale gateway look healthy.
 
 ### Before deploying
 
-```sh
-python3 tests/deploy-check.py
-```
+`tests/deploy-check.py` compares a gateway against the source: container
+health (or a named image), the contracts each side accepts, and the digest of
+the gateway. It exists because tests exercise the *source* while the *running*
+image can be older — a mismatch that passed a full suite once already. It only
+inspects; it never rebuilds, restarts or deploys.
 
-Compares the running instance against the source: container health, the
-contracts each side accepts, and the digest of the gateway in the image. It
-exists because tests exercise the *source* while the *running* image can be
-older — a mismatch that passed a full suite once already. It only inspects; it
-never rebuilds, restarts or deploys. Run it as the user owning the container:
+It runs in three places:
+
+- **CI**, after the image is loaded, for both the baseline and the Ephor image.
+- **`rebekah-run`**, before the container starts, when an agenda directory is
+  mounted. A real mismatch (exit 1) refuses to start; an image that simply
+  cannot be inspected (exit 2) is reported and allowed through, since an
+  unreadable image will not start anyway and a runtime hiccup must not block a
+  legitimate activation. `REBEKAH_SKIP_CONTRACT_CHECK=1` overrides it.
+- **By hand**, against the running instance:
 
 ```sh
 sudo -u baz0 env XDG_RUNTIME_DIR=/run/user/1001 \
   REBEKAH_NAME=baz0 REBEKAH_DAILY_AGENDA_DIR=/srv/ragbaz/reports/daily-agenda \
   python3 tests/deploy-check.py
+
+# or against an image before activating it
+python3 tests/deploy-check.py --image sha256:<pin>
 ```
 
 States: `ready`, `not-configured`, `unavailable`. An unavailable/malformed or

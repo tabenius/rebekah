@@ -35,12 +35,19 @@ jobs:
           bash tests/gateway.sh
       - name: Test the Dash push client
         run: python3 tests/dash-push.py
+      - name: Test the private agenda view
+        run: python3 tests/daily-agenda.py
       - name: Test the MCP bridge
         run: bash tests/mcp-bridge.sh
       - name: Build image
         run: nix build .#image --print-build-logs
       - name: Load image
         run: docker load < result
+      # The image must accept the generation contract the workspace generator
+      # writes, or a fresh edition reads as unavailable. This is the check that
+      # would have caught a stale image passing every source-level test.
+      - name: Check the image against the agenda contract
+        run: CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image localhost/rebekah:latest
       - name: Smoke test
         run: bash tests/smoke.sh
 
@@ -71,6 +78,9 @@ jobs:
       - name: Load image
         if: env.HAS_EPHOR_TOKEN == 'true'
         run: docker load < result
+      - name: Check the image against the agenda contract
+        if: env.HAS_EPHOR_TOKEN == 'true'
+        run: CONTAINER_RUNTIME=docker python3 tests/deploy-check.py --image localhost/rebekah:latest
       - name: Smoke test with Ephor enabled
         if: env.HAS_EPHOR_TOKEN == 'true'
         run: REBEKAH_SMOKE_EPHOR=1 bash tests/smoke.sh

@@ -252,13 +252,52 @@ class AgendaTests(unittest.TestCase):
         fake = self.directory / "podman"
         fake.write_text('#!/bin/sh\nif [ "$1" = run ]; then printf "%s\\n" "$@"; fi\n')
         fake.chmod(0o755)
+        # The fixture image declares no agenda contract, so the launcher's
+        # pre-start check is opted out of here; it has its own tests below.
         result = subprocess.run(["bash", str(ROOT / "deploy/podman/rebekah-run")], capture_output=True, text=True,
             env={**os.environ, "PATH": str(self.directory) + ":" + os.environ["PATH"],
+                 "REBEKAH_SKIP_CONTRACT_CHECK": "1",
                  "REBEKAH_IMAGE": "sha256:fixture", "REBEKAH_WORKSPACE": str(ROOT),
                  "REBEKAH_ENV_FILE": str(self.directory / "none"), "REBEKAH_DAILY_AGENDA_HOST_DIR": str(self.directory)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"type=bind,src={self.directory},dst=/run/daily-agenda,ro", result.stdout)
         self.assertIn("REBEKAH_DAILY_AGENDA_DIR=/run/daily-agenda", result.stdout)
+
+    def _launch(self, **extra):
+        """Run the launcher with a stub podman that reports a fixture image."""
+        stub = self.directory / "podman"
+        # deploy-check inspects with `run --rm --entrypoint cat <image> <path>`;
+        # the launcher runs `run --rm --name <name> ...`. Only the former is
+        # made to fail, so the test exercises the check rather than the launch.
+        stub.write_text(
+            '#!/bin/sh\n'
+            'for arg in "$@"; do [ "$arg" = --entrypoint ] && exit "${STUB_IMAGE_READ:-0}"; done\n'
+            'if [ "$1" = run ]; then printf "LAUNCHED\\n"; fi\n'
+            'exit 0\n')
+        stub.chmod(0o755)
+        checker = ROOT / "tests/deploy-check.py"
+        self.assertTrue(checker.is_file(), "deploy-check.py must ship with the repository")
+        return subprocess.run(["bash", str(ROOT / "deploy/podman/rebekah-run")], capture_output=True, text=True,
+            env={**os.environ, "PATH": str(self.directory) + ":" + os.environ["PATH"],
+                 "REBEKAH_IMAGE": "sha256:fixture", "REBEKAH_WORKSPACE": str(ROOT),
+                 "REBEKAH_DAILY_AGENDA_HOST_DIR": str(self.directory), **extra})
+
+    def test_launcher_refuses_an_image_whose_contract_cannot_be_read(self):
+        # deploy-check exits 2 when it cannot inspect the image at all.
+        result = self._launch(STUB_IMAGE_READ="2")
+        self.assertEqual(result.returncode, 0, "an uninspectable image must not block a launch")
+        self.assertIn("LAUNCHED", result.stdout)
+        self.assertIn("could not inspect", result.stderr)
+
+    def test_launcher_runs_the_contract_check_only_when_an_agenda_is_mounted(self):
+        stub = self.directory / "podman"
+        stub.write_text('#!/bin/sh\nif [ "$1" = run ]; then printf "LAUNCHED\\n"; fi\nexit 0\n')
+        stub.chmod(0o755)
+        no_agenda = subprocess.run(["bash", str(ROOT / "deploy/podman/rebekah-run")], capture_output=True, text=True,
+            env={**os.environ, "PATH": str(self.directory) + ":" + os.environ["PATH"],
+                 "REBEKAH_IMAGE": "sha256:" + "0" * 64, "REBEKAH_WORKSPACE": str(ROOT)})
+        self.assertEqual(no_agenda.returncode, 0, no_agenda.stderr)
+        self.assertNotIn("contract", no_agenda.stderr.lower())
 
 
 if __name__ == "__main__":

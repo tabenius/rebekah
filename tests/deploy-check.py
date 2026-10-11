@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Check that a running instance can read the edition the host generates.
+"""Check that an image or a running instance can read the edition the host generates.
 
 A gateway older than the generator rejects a new edition and reports the whole
 view unavailable, which is indistinguishable from a damaged artifact. That is
 how a stale image survived a full test run: the tests exercised the source, not
 what was running. This compares the two before it costs anyone a day.
 
+  --image NAME   check an image instead of a running container (CI, pre-activate)
+  REBEKAH_NAME   the running container to check (default: rebekah)
+
 Reports, exits non-zero on a mismatch:
 
-  contract   the running gateway does not understand the generated contract
-  revision   the running gateway differs from the source gateway in the repo
+  contract   the gateway does not understand the generated contract
+  revision   the gateway differs from the source gateway in the repository
   service    the container is not running or not healthy
 
 Read-only: it inspects, it never rebuilds, restarts or deploys.
 """
+import argparse
 import hashlib
 import json
 import os
@@ -48,20 +52,32 @@ def source_digest():
     return hashlib.sha256(GATEWAY.read_bytes()).hexdigest()
 
 
-def container_file(path):
-    """Read a file out of the running container without executing anything in it."""
-    result = run([RUNTIME, "exec", CONTAINER, "cat", path])
-    return result.stdout if result.returncode == 0 else None
+def container_file(path, image):
+    """Read a file out of the image or the running container, executing nothing.
+
+    Returns None when the file is genuinely unreadable. A runtime that cannot
+    start the image at all also yields None, so an unreadable image is never
+    mistaken for one that simply omits a field.
+    """
+    if image:
+        argv = [RUNTIME, "run", "--rm", "--entrypoint", "cat", image, path]
+    else:
+        argv = [RUNTIME, "exec", CONTAINER, "cat", path]
+    result = run(argv)
+    if result.returncode:
+        return None
+    # A runtime error can exit zero with an empty body; require real content.
+    return result.stdout if result.stdout.strip() else None
 
 
-def container_contracts():
-    """Contracts the running gateway declares.
+def container_contracts(image):
+    """Contracts the gateway declares.
 
     Returns (readable, contracts). readable is False when the gateway file
     could not be read at all; contracts is None when it was read but predates
     the constant, meaning it cannot read a contract-named edition.
     """
-    text = container_file("/usr/local/lib/rebekah/gateway.py")
+    text = container_file("/usr/local/lib/rebekah/gateway.py", image)
     if text is None:
         return False, None
     marker = "AGENDA_CONTRACTS = {"
@@ -85,40 +101,49 @@ def container_running_contract():
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--image", help="check this image instead of a running container")
+    image = parser.parse_args().image
+
     problems = []
+    subject = f"image '{image}'" if image else f"container '{CONTAINER}'"
     print(f"source gateway contracts: {', '.join(sorted(source_contract()))}")
     print(f"source gateway sha256:   {source_digest()[:16]}")
 
-    health = run([RUNTIME, "exec", CONTAINER, "rebekah-health"])
-    if health.returncode:
-        print(f"FAIL service: container '{CONTAINER}' is not healthy")
-        print(health.stdout.strip() or health.stderr.strip())
-        return 1
-    print(f"container '{CONTAINER}': healthy")
+    if not image:
+        health = run([RUNTIME, "exec", CONTAINER, "rebekah-health"])
+        if health.returncode:
+            print(f"FAIL service: container '{CONTAINER}' is not healthy")
+            print(health.stdout.strip() or health.stderr.strip())
+            return 1
+        print(f"container '{CONTAINER}': healthy")
 
-    readable, running = container_contracts()
+    readable, running = container_contracts(image)
     if not readable:
-        print(f"FAIL service: cannot read the gateway inside '{CONTAINER}'")
-        return 1
+        # Exit 2, distinct from a mismatch: the image could not be inspected at
+        # all. An unreadable image will not start regardless, and a launcher
+        # reading this must not mistake a runtime hiccup for a bad contract.
+        print(f"INCONCLUSIVE: cannot read the gateway in {subject}")
+        return 2
     if running:
-        print(f"running gateway contracts: {', '.join(sorted(running))}")
+        print(f"{'image' if image else 'running'} gateway contracts: {', '.join(sorted(running))}")
     else:
-        print("running gateway contracts: declares none (predates the contract check)")
+        print(f"{'image' if image else 'running'} gateway contracts: declares none (predates the contract check)")
 
     if running != source_contract():
         problems.append(
-            f"the running gateway accepts {sorted(running) if running else 'nothing'} "
+            f"the {subject} accepts {sorted(running) if running else 'nothing'} "
             f"but the source accepts {sorted(source_contract())}")
     running_digest = hashlib.sha256(
-        (container_file("/usr/local/lib/rebekah/gateway.py") or "").encode()).hexdigest()
+        (container_file("/usr/local/lib/rebekah/gateway.py", image) or "").encode()).hexdigest()
     if running_digest != source_digest():
-        print(f"NOTE the running gateway differs from {GATEWAY} (expected when the")
+        print(f"NOTE the gateway in {subject} differs from {GATEWAY} (expected when the")
         print("     image predates an uncommitted or unpushed change)")
 
     contract, generator = container_running_contract()
     if contract and running is not None and contract not in running:
         problems.append(f"the generated edition uses contract '{contract}', "
-                        f"which the running gateway does not accept")
+                        f"which the {subject} does not accept")
     if contract:
         # The snapshot carries the revision object; the manifest's own
         # `generator` key is a legacy path string, so it is not read here.
@@ -133,7 +158,7 @@ def main():
             print(f"FAIL {problem}")
         print("\nRebuild and activate the image before deploying, or the agenda will read unavailable.")
         return 1
-    print("\nOK: the running gateway can read the edition this host generates.")
+    print(f"\nOK: {subject} can read the edition this host generates.")
     return 0
 
 
