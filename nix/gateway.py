@@ -775,7 +775,7 @@ def v1_daily_agenda(cfg):
                 "tasks_truncated": len(own) > 40, "tasks": projected_tasks, "concepts": concepts})
         generation = snapshot.get("generation")
         if generation is not None:
-            if (not isinstance(generation, dict) or generation.get("provider") not in ("none", "ollama-local")
+            if (not isinstance(generation, dict) or generation.get("provider") not in ("none", "ollama-local", "opencode-hosted")
                     or generation.get("network") not in ("online", "offline")
                     or generation.get("status") not in ("ready", "fallback")):
                 raise ValueError("invalid agenda generation provenance")
