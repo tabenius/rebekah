@@ -17,6 +17,7 @@ grep <user> /etc/subuid /etc/subgid     # needs a range of at least 65536
 
 ```bash
 install -m 0755 rebekah-run ~/bin/rebekah-run
+install -m 0755 rebekah-ab ~/bin/rebekah-ab
 install -Dm 0644 rebekah.service ~/.config/systemd/user/rebekah.service
 ```
 
@@ -81,11 +82,58 @@ reaches the host unreviewed:
 ```bash
 podman pull ghcr.io/tabenius/rebekah:latest
 podman image inspect ghcr.io/tabenius/rebekah:latest --format '{{index .RepoDigests 0}}'
-# put that digest in REBEKAH_IMAGE, then:
-systemctl --user restart rebekah.service
+# activate the digest shown above, then verify before promotion:
+rebekah-ab activate ghcr.io/tabenius/rebekah@sha256:<digest>
 ```
 
 State lives in the `rebekah-state` volume and survives restarts and updates.
+
+### Verified activation and rollback
+
+`rebekah-ab` runs as the same user that owns the service and Podman store. It
+requires host Bash, Python 3, `flock`, and standard Unix tools. The candidate must
+already be loaded/pulled and pinned by digest or full image ID; tags are refused.
+It reads `REBEKAH_NAME` and `REBEKAH_DAILY_AGENDA_HOST_DIR` from the host
+EnvironmentFile without executing it. Override the file with `REBEKAH_ENV_FILE`
+or the unit with `REBEKAH_UNIT` (default: `<REBEKAH_NAME>.service`).
+
+```bash
+rebekah-ab status
+rebekah-ab verify
+rebekah-ab --dry-run activate sha256:<full-image-id>
+rebekah-ab activate sha256:<full-image-id>
+rebekah-ab rollback
+rebekah-ab recover
+```
+
+Activation preflights the candidate and rollback image before switching. For a
+configured agenda, the edition contract must match an exact gateway declaration;
+a missing or malformed manifest refuses deployment. After restart, the running
+image ID must match the requested pin, service health must pass, the gateway must
+answer, and a configured agenda must serve `ready`. `not-configured` is a failure
+when an agenda was requested. Initial B is seeded only from a verified running
+image; activation without a verified baseline is refused.
+
+After success, `last-good-image` becomes A; `previous-good-image` retains the
+former B. To return to that older baseline after a later regression, pass its pin
+to `activate`. Keep those images in the local store; do not prune them. Failed
+activation restores B and verifies it again. Exit codes: `0` success, `1` candidate
+failed but rollback verified, `2` refused deployment, `3` failed rollback/recovery.
+
+Mutations take an exclusive lock, back up the environment file, and replace pins
+atomically. Dry-run never writes state or restarts the service (preflight may run
+an isolated, temporary container without network or mounted state). A pending
+rollback record survives an interrupted deployment; `recover` restores it and
+only clears the record after successful verification. An incomplete transaction
+blocks another activation. INT/TERM and unexpected script errors attempt recovery
+immediately; power loss or SIGKILL requires `recover` after startup. There is no
+background post-promotion monitor.
+
+**This rolls back the image, not persistent data.** Upstream services can change
+their databases even without a Rebekah migration marker. For a state-changing
+upgrade, arrange application-consistent backups and establish backward
+compatibility before activation. The script does not snapshot or restore the
+state volume, and must not rewind an audit chain automatically.
 
 ## Private Daily Agenda
 

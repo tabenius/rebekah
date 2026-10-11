@@ -37,6 +37,8 @@ jobs:
         run: python3 tests/dash-push.py
       - name: Test the private agenda view
         run: python3 tests/daily-agenda.py
+      - name: Test deployment rollback and promotion
+        run: python3 tests/rebekah-ab.py
       - name: Test the MCP bridge
         run: bash tests/mcp-bridge.sh
       - name: Build image

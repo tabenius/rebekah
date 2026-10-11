@@ -15,20 +15,47 @@
 #   rebekah-ab status              show A, B and the last outcome
 #   rebekah-ab activate IMAGE      promote IMAGE to A, verify, keep or revert
 #   rebekah-ab rollback            return to B and verify
+#   rebekah-ab recover             recover an interrupted deployment
 #   rebekah-ab verify              verify A without changing anything
 #   rebekah-ab --dry-run ...       print what would happen and change nothing
 #
 # Read-only except for `activate` and `rollback`, which restart the service.
 set -euo pipefail
 
+env_file="${REBEKAH_ENV_FILE:-$HOME/.config/rebekah/rebekah.env}"
+# Read only the settings we need; never execute a systemd EnvironmentFile as
+# shell code. Explicit caller overrides take precedence.
+command -v python3 >/dev/null || { printf 'python3 is required\n' >&2; exit 2; }
+settings="$(python3 - "$env_file" <<'PY'
+import shlex, sys
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith(('#', ';')):
+            continue
+        fields = shlex.split(line, comments=True)
+        if len(fields) == 1 and '=' in fields[0]:
+            key, value = fields[0].split('=', 1)
+            if key in ('REBEKAH_NAME', 'REBEKAH_DAILY_AGENDA_HOST_DIR'):
+                if '\n' in value or '\r' in value:
+                    raise ValueError('multiline settings are not supported')
+                print(fields[0])
+PY
+)" || exit 2
+while IFS='=' read -r key value; do
+  case "$key" in
+    REBEKAH_NAME|REBEKAH_DAILY_AGENDA_HOST_DIR)
+      if [[ ! -v "$key" ]]; then printf -v "$key" '%s' "$value"; fi ;;
+  esac
+done <<< "$settings"
 name="${REBEKAH_NAME:-rebekah}"
 runtime="${CONTAINER_RUNTIME:-podman}"
-unit="${REBEKAH_UNIT:-rebekah.service}"
-env_file="${REBEKAH_ENV_FILE:-$HOME/.config/rebekah/rebekah.env}"
+unit="${REBEKAH_UNIT:-$name.service}"
 state_dir="$(dirname -- "$env_file")"
 # B is the last verified-good image. Kept beside the env file, never inside
 # the image, so rolling back does not depend on the candidate being startable.
 good_file="$state_dir/last-good-image"
+pending_file="$state_dir/pending-rollback-image"
 history="$state_dir/ab-history.log"
 dry_run=0
 [[ "${1:-}" == "--dry-run" ]] && { dry_run=1; shift; }
@@ -51,6 +78,55 @@ write_pin() {
   mv "$tmp" "$env_file"
 }
 
+write_good() {
+  local tmp
+  tmp="$(mktemp "$good_file.XXXXXX")"
+  printf '%s\n' "$1" > "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$good_file"
+}
+
+record_pending() {
+  local tmp
+  tmp="$(mktemp "$pending_file.XXXXXX")"
+  printf '%s\n' "$1" > "$tmp"; chmod 600 "$tmp"
+  mv "$tmp" "$pending_file"
+}
+
+image_id() { "$runtime" image inspect --format '{{.Id}}' "$1"; }
+
+check_contract() {
+  # Parse an exact set with Python's AST, never a substring match or eval.
+  python3 -c '
+import ast, json, sys
+try:
+    with open(sys.argv[1]) as f:
+        contract = json.load(f)["generator_contract"]
+    assert isinstance(contract, str) and contract
+    tree = ast.parse(sys.stdin.read())
+    accepted = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "AGENDA_CONTRACTS" for t in node.targets):
+            accepted = ast.literal_eval(node.value)
+    assert isinstance(accepted, (set, list, tuple)) and contract in accepted
+except Exception as exc:
+    print("agenda contract verification failed: " + str(exc), file=sys.stderr)
+    sys.exit(1)
+' "$REBEKAH_DAILY_AGENDA_HOST_DIR/manifest.json"
+}
+
+preflight() {
+  local pin="$1"
+  [[ "$pin" =~ ^sha256:[a-f0-9]{64}$ || "$pin" =~ ^[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}$ ]] || {
+    log 'refusing a mutable tag or invalid image pin'; return 1;
+  }
+  image_id "$pin" >/dev/null || { log 'image must already be loaded or pulled'; return 1; }
+  if [[ -n "${REBEKAH_DAILY_AGENDA_HOST_DIR:-}" ]]; then
+    "$runtime" run --rm --network none --entrypoint cat "$pin" \
+      /usr/local/lib/rebekah/gateway.py | check_contract || return 1
+  fi
+}
+
 remember() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$history" 2>/dev/null || true; }
 
 restart() {
@@ -71,6 +147,10 @@ wait_ready() {
 # Does the gateway answer, and does it answer with something usable?
 verify() {
   local label="$1"
+  local expected actual
+  expected="$(image_id "${2:-$(current_pin)}")" || return 1
+  actual="$("$runtime" inspect --format '{{.Image}}' "$name")" || return 1
+  [[ "$actual" == "$expected" ]] || { log "FAIL [$label] running image differs from requested pin"; return 1; }
   if ! "$runtime" exec "$name" rebekah-health >/dev/null 2>&1; then
     log "FAIL [$label] services are not healthy"; return 1
   fi
@@ -85,8 +165,9 @@ verify() {
   # When an agenda edition is mounted, the gateway must actually serve it.
   # This is the check that catches a stale image: it starts, is healthy, and
   # answers `unavailable` for every edition.
-local agenda="${REBEKAH_DAILY_AGENDA_HOST_DIR:-}"
-    if [[ -n "$agenda" && -f "$agenda/manifest.json" ]]; then
+  local agenda="${REBEKAH_DAILY_AGENDA_HOST_DIR:-}"
+    if [[ -n "$agenda" ]]; then
+      [[ -f "$agenda/manifest.json" ]] || { log "FAIL [$label] configured agenda manifest is missing"; return 1; }
       local view
       view="$("$runtime" exec "$name" sh -c \
         'curl -s --max-time 10 -H "Authorization: Bearer $(cat /run/rebekah/gateway-token)" http://127.0.0.1:8080/api/v1/daily-agenda' \
@@ -101,32 +182,16 @@ local agenda="${REBEKAH_DAILY_AGENDA_HOST_DIR:-}"
       agenda_status="$(printf '%s' "$view" \
         | "$runtime" exec -i "$name" jq -r '.status // ""' 2>/dev/null | tr -d '\r\n')" || agenda_status=""
       case "$agenda_status" in
-        ready|not-configured) : ;;
+        ready) : ;;
         *) log "FAIL [$label] agenda view is '${agenda_status:-unparseable}', not ready"; return 1 ;;
       esac
 
       # Serving "ready" is not enough. An image from before the contract check
       # serves it happily while silently ignoring half the projection, so the
       # edition's own contract is compared with what this gateway accepts.
-      local edition_contract gateway_contracts
-      edition_contract="$(jq -r '.generator_contract // ""' "$agenda/manifest.json" 2>/dev/null || true)"
-      # The image has grep but no sed, so extract with grep and strip the
-      # punctuation host-side. An empty result is a genuine absence: a gateway
-      # from before the contract check has no such line at all.
-      gateway_contracts="$("$runtime" exec "$name" grep -h '^AGENDA_CONTRACTS' \
-        /usr/local/lib/rebekah/gateway.py 2>/dev/null \
-        | tr -d ' \n{}"=' )" || gateway_contracts=""
-      gateway_contracts="${gateway_contracts#AGENDA_CONTRACTS}"
-      if [[ -n "$edition_contract" ]]; then
-        if [[ -z "$gateway_contracts" ]]; then
-          log "FAIL [$label] the gateway declares no agenda contract; it predates $edition_contract"
-          return 1
-        fi
-        if [[ "$gateway_contracts" != *"$edition_contract"* ]]; then
-          log "FAIL [$label] gateway accepts [$gateway_contracts], edition is $edition_contract"
-          return 1
-        fi
-      fi
+      "$runtime" exec "$name" cat /usr/local/lib/rebekah/gateway.py | check_contract || {
+        log "FAIL [$label] agenda contract mismatch"; return 1;
+      }
     fi
   log "OK [$label] healthy, gateway answering${agenda:+, agenda serving}"
   return 0
@@ -139,25 +204,41 @@ do_activate() {
   [[ -n "$candidate" ]] || { log "activate needs an image reference"; return 2; }
   log "A=$candidate  B=${good:-none}  previous=${previous:-none}"
 
+  preflight "$candidate" || { log 'candidate refused before changing the active pin'; return 2; }
+  if (( dry_run )); then log "dry run: would set A=$candidate, restart and verify"; return 0; fi
+
   # Refuse to record a B that is not verified good, or a lost reference turns
   # the next failure into a dead end.
   if [[ -z "$good" && -n "$previous" ]]; then
     if verify "previous" ; then
-      printf '%s\n' "$previous" > "$good_file"; chmod 600 "$good_file"
+      write_good "$previous"
       good="$previous"
       log "seeded B with the currently running image"
     else
-      log "WARN the running image is not healthy; B stays unset and a failure cannot be reverted"
+      log "refusing activation: no verified rollback image"; return 2
     fi
   fi
 
-  if (( dry_run )); then log "dry run: would set A=$candidate, restart and verify"; return 0; fi
+  [[ -n "$good" ]] || { log 'refusing activation without B'; return 2; }
+  preflight "$good" || { log 'rollback image failed preflight'; return 2; }
+  cp -p "$env_file" "$(mktemp "$env_file.backup.XXXXXX")"
+  record_pending "$good"
+  recovery_pin="$good"
 
   write_pin "$candidate"
   remember "activate $candidate (previous $previous)"
   log "restarting with A"
-  if restart && wait_ready && verify "A"; then
-    printf '%s\n' "$candidate" > "$good_file"; chmod 600 "$good_file"
+  if restart && wait_ready && verify "A" "$candidate"; then
+    # Keep the former baseline for manual recovery after a later regression.
+    local tmp
+    if [[ "$candidate" != "$good" ]]; then
+      tmp="$(mktemp "$state_dir/previous-good-image.XXXXXX")"
+      printf '%s\n' "$good" > "$tmp"; chmod 600 "$tmp"
+      mv "$tmp" "$state_dir/previous-good-image"
+    fi
+    write_good "$candidate"
+    rm -f "$pending_file"
+    recovery_pin=""
     remember "promoted $candidate to B"
     log "A verified; B := $candidate"
     return 0
@@ -170,15 +251,17 @@ do_activate() {
   fi
   log "reverting to B=$good"
   write_pin "$good"
+  recovery_pin=""
   restart || true
   if wait_ready && verify "B after rollback"; then
+    rm -f "$pending_file"
     remember "rolled back to $good"
     log "rolled back to B=$good and it verified"
     return 1
   fi
   remember "FAILED both A=$candidate and B=$good"
   log "BOTH A and B failed to verify. This is not a rollback success."
-  log "A=$candidate is still pinned; the last known-good image is $good"
+  log "B=$good is pinned but did not verify; candidate was $candidate"
   return 3
 }
 
@@ -187,17 +270,21 @@ do_rollback() {
   good="$(cat "$good_file" 2>/dev/null || true)"
   [[ -n "$good" ]] || { log "no B recorded; nothing to roll back to"; return 2; }
   if (( dry_run )); then log "dry run: would set A=$good, restart and verify"; return 0; fi
+  preflight "$good" || return 2
+  cp -p "$env_file" "$(mktemp "$env_file.backup.XXXXXX")"
+  record_pending "$good"
   log "rolling back to B=$good"
   write_pin "$good"; remember "rollback to $good"; restart || true
-  if wait_ready && verify "B"; then return 0; fi
+  if wait_ready && verify "B"; then rm -f "$pending_file"; return 0; fi
   log "B did not verify either; this is not a successful rollback"
   return 3
 }
 
 do_status() {
-  printf 'A (running pin): %s\n' "$(current_pin || echo none)"
+  printf 'A (configured pin): %s\n' "$(current_pin || echo none)"
   printf 'B (last good):   %s\n' "$(cat "$good_file" 2>/dev/null || echo none)"
   printf 'env file:        %s\n' "$env_file"
+  if [[ -f "$pending_file" ]]; then printf 'recovery:        incomplete deployment; run recover\n'; fi
   if (( dry_run )); then return 0; fi
   if "$runtime" exec "$name" rebekah-health >/dev/null 2>&1; then printf 'services:        healthy\n'
   else printf 'services:        NOT healthy\n'; fi
@@ -206,10 +293,41 @@ do_status() {
 }
 
 command="${1:-status}"
+recovery_pin=""
+# Only mutations lock; status, verification and dry-run leave no state behind.
+if (( ! dry_run )) && [[ "$command" == activate || "$command" == rollback || "$command" == recover ]]; then
+  exec 9>"$state_dir/ab.lock"
+  flock -n 9 || { log 'another deployment holds the lock'; exit 2; }
+fi
+recover_on_exit() {
+  local rc=$?
+  trap - EXIT INT TERM
+  if [[ -n "$recovery_pin" ]]; then
+    log "interrupted activation; restoring $recovery_pin"
+    if ! { write_pin "$recovery_pin" && restart && wait_ready && verify 'recovery' "$recovery_pin"; }; then
+      log 'recovery failed'; rc=3
+    else
+      rm -f "$pending_file"
+    fi
+  fi
+  exit "$rc"
+}
+trap recover_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 case "$command" in
   status)   do_status ;;
   verify)   wait_ready && verify "A" ;;
-  activate) do_activate "${2:-}" ;;
+  activate)
+    [[ ! -f "$pending_file" ]] || { log 'incomplete deployment; run recover before activating another image'; exit 2; }
+    do_activate "${2:-}" ;;
   rollback) do_rollback ;;
-  *) log "unknown command: $command"; printf 'usage: rebekah-ab [--dry-run] status|verify|activate IMAGE|rollback\n' >&2; exit 2 ;;
+  recover)
+    [[ -f "$pending_file" ]] || { log 'no incomplete deployment'; exit 0; }
+    pin="$(cat "$pending_file")"
+    if (( dry_run )); then log "dry run: would restore $pin"; exit 0; fi
+    preflight "$pin" || exit 2
+    write_pin "$pin"
+    if restart && wait_ready && verify 'recovery' "$pin"; then rm -f "$pending_file"; else exit 3; fi ;;
+  *) log "unknown command: $command"; printf 'usage: rebekah-ab [--dry-run] status|verify|activate IMAGE|rollback|recover\n' >&2; exit 2 ;;
 esac
