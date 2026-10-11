@@ -82,6 +82,45 @@ class AgendaTests(unittest.TestCase):
         self.assertEqual(view["source_observed_at"], old.isoformat())
         self.assertGreater(view["generated_at"], view["source_observed_at"])
 
+    def test_governed_change_sets_are_projected_bounded_and_validated(self):
+        self.snapshot["projects"][0]["governed"] = {"available": True, "reason": "", "change_sets": [{
+            "id": "agenda-outage", "goal": "Offline tolerance", "state": "active", "readiness": "unreviewed",
+            "branch": "main", "head": "c" * 40, "observed_at": self.observed.isoformat(),
+            "evidence_current": 2, "evidence_failed": 1, "evidence_obsolete": 0,
+            "dirty_paths": 3, "scope_collisions": 1}]}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        governed = view["items"][0]["governed"]
+        self.assertTrue(governed["available"])
+        change = governed["change_sets"][0]
+        self.assertEqual((change["evidence_current"], change["evidence_failed"]), (2, 1))
+        self.assertEqual(change["scope_collisions"], 1)
+        # A malformed governed record must fail the edition, not read as "none".
+        for mutation in (
+            lambda g: g["change_sets"][0].update(id="../escape"),
+            lambda g: g["change_sets"][0].update(evidence_current=-1),
+            lambda g: g["change_sets"][0].update(evidence_current=True),
+            lambda g: g["change_sets"][0].update(observed_at="not-a-time"),
+            lambda g: g.update(available="yes"),
+            lambda g: g.update(available=False, reason=""),
+        ):
+            self.snapshot["projects"][0]["governed"] = json.loads(json.dumps(self.snapshot["projects"][0]["governed"]))
+            mutation(self.snapshot["projects"][0]["governed"])
+            self.write_edition()
+            self.assertEqual(gw.v1_daily_agenda(self.cfg)["status"], "unavailable")
+
+    def test_a_repository_without_a_ledger_is_not_a_collection_failure(self):
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertIsNone(view["items"][0]["governed"])
+        self.assertEqual(view["collection_error_count"], 0)
+        self.snapshot["projects"][0]["governed"] = {"available": False, "reason": "no local ledger", "change_sets": []}
+        self.write_edition()
+        view = gw.v1_daily_agenda(self.cfg)
+        self.assertEqual(view["status"], "ready")
+        self.assertFalse(view["items"][0]["governed"]["available"])
+        self.assertEqual(view["items"][0]["governed"]["change_sets"], [])
+
     def test_model_provenance_is_bounded_and_does_not_expose_endpoint(self):
         self.snapshot["generation"] = {"provider": "ollama-local", "model": "qwen2.5:3b",
             "model_digest": "sha256:" + "a" * 64, "network": "offline", "status": "ready",

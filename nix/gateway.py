@@ -635,6 +635,54 @@ def _agenda_time(value):
     return stamp
 
 
+def _agenda_count(value):
+    """A non-negative integer, never a bool masquerading as a count."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100000:
+        raise ValueError("invalid agenda count")
+    return value
+
+
+def _agenda_governed(value):
+    """Project bounded WeftMark change sets; an absent ledger is not an error.
+
+    Governed work is recorded state, so a malformed record must fail the whole
+    edition rather than silently present a repository as having no change sets.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("available"), bool):
+        raise ValueError("invalid agenda governed state")
+    available = value["available"]
+    reason = "" if available else _agenda_text(value.get("reason"), 200)
+    if not available and not reason:
+        raise ValueError("unavailable governed state needs a reason")
+    if not available:
+        return {"available": False, "reason": reason, "change_sets": []}
+    sets = value.get("change_sets")
+    if not isinstance(sets, list) or len(sets) > 20:
+        raise ValueError("invalid agenda change sets")
+    projected = []
+    for change in sets:
+        if not isinstance(change, dict):
+            raise ValueError("invalid agenda change set")
+        identifier = _agenda_text(change.get("id"), 120)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", identifier):
+            raise ValueError("invalid change set id")
+        observed_at = change.get("observed_at")
+        projected.append({
+            "id": identifier, "goal": _agenda_text(change.get("goal"), 400),
+            "state": _agenda_text(change.get("state"), 40), "readiness": _agenda_text(change.get("readiness"), 40),
+            "branch": _agenda_text(change.get("branch"), 200), "head": _agenda_text(change.get("head"), 64),
+            "observed_at": observed_at if observed_at is None else _agenda_time(observed_at).isoformat(),
+            "evidence_current": _agenda_count(change.get("evidence_current")),
+            "evidence_failed": _agenda_count(change.get("evidence_failed")),
+            "evidence_obsolete": _agenda_count(change.get("evidence_obsolete")),
+            "dirty_paths": _agenda_count(change.get("dirty_paths")),
+            "scope_collisions": _agenda_count(change.get("scope_collisions")),
+        })
+    return {"available": True, "reason": "", "change_sets": projected}
+
+
 def v1_daily_agenda(cfg):
     """Project the generated edition, never its HTML or workstation file links.
 
@@ -723,6 +771,7 @@ def v1_daily_agenda(cfg):
                 "recent_work": _agenda_text(project["commits"][0]["subject"] if count else "No commits in the window", 400),
                 "next_move": _agenda_text(next_move or "Inspect the project plan and record a bounded next task", 400),
                 "note": _agenda_text(config.get("fallback") if not own else "", 3000),
+                "governed": _agenda_governed(project.get("governed")),
                 "tasks_truncated": len(own) > 40, "tasks": projected_tasks, "concepts": concepts})
         generation = snapshot.get("generation")
         if generation is not None:

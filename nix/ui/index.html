@@ -679,6 +679,25 @@
     if (!p) { roadmap.appendChild(el("p", "empty", "Choose a next move to unfold the full roadmap.")); return; }
     roadmap.appendChild(el("h3", null, p.title + " · roadmap"));
     roadmap.appendChild(el("p", "status", "HEAD " + (p.head || "unavailable") + ". Check current native scope, owner and evidence before continuing."));
+    if (p.governed) {
+      const gov = el("details", "agenda-governed");
+      gov.appendChild(el("summary", null, "Governed work · WeftMark change sets (" + p.governed.change_sets.length + ")"));
+      gov.appendChild(el("p", "status", "WeftMark is the authority for change sets, claims, reviews and evidence. This is recorded work, not a plan."));
+      if (!p.governed.available) gov.appendChild(el("p", "status", p.governed.reason));
+      else if (!p.governed.change_sets.length) gov.appendChild(el("p", "status", "A ledger exists and records no change set."));
+      else {
+        const list = el("ul");
+        p.governed.change_sets.forEach((c) => {
+          const item = el("li", null, c.id + " · " + c.state + " · " + c.readiness + " · evidence " + c.evidence_current + " current");
+          item.appendChild(el("p", "status", c.goal));
+          if (c.dirty_paths) item.appendChild(el("p", "banner", c.dirty_paths + " uncommitted path(s); evidence binds to the observed head, not the worktree."));
+          if (c.readiness !== "ready" && c.readiness !== "approved") item.appendChild(el("p", "banner", "Not reviewed. A recorded receipt is not a review decision."));
+          list.appendChild(item);
+        });
+        gov.appendChild(list);
+      }
+      roadmap.appendChild(gov);
+    }
     const grid = el("div", "agenda-reading"), tasks = el("div"), margin = el("aside"); margin.setAttribute("aria-label", "Concept reminders");
     if (p.note) tasks.appendChild(el("p", null, p.note));
     (p.tasks || []).forEach((t) => {
