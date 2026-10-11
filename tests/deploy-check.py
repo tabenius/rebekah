@@ -73,7 +73,7 @@ def container_contracts():
 
 
 def container_running_contract():
-    """What the live API says it can read, which is the contract that matters."""
+    """The contract the edition on disk declares, if it declares one."""
     view = os.environ.get("REBEKAH_DAILY_AGENDA_HOST_DIR") or "/run/daily-agenda"
     host_dir = os.environ.get("REBEKAH_DAILY_AGENDA_DIR", "")
     directory = Path(host_dir) if host_dir else Path(view)
@@ -120,7 +120,12 @@ def main():
         problems.append(f"the generated edition uses contract '{contract}', "
                         f"which the running gateway does not accept")
     if contract:
-        revision = (generator or {}).get("revision")
+        # The snapshot carries the revision object; the manifest's own
+        # `generator` key is a legacy path string, so it is not read here.
+        edition_dir = Path(os.environ.get("REBEKAH_DAILY_AGENDA_DIR") or os.environ.get("REBEKAH_DAILY_AGENDA_HOST_DIR") or "/run/daily-agenda")
+        snapshot = edition_dir / "snapshot.json"
+        recorded = json.loads(snapshot.read_text(encoding="utf-8")).get("generator") if snapshot.is_file() else None
+        revision = recorded.get("revision") if isinstance(recorded, dict) else None
         print(f"generated edition contract: {contract} (generator {str(revision)[:12] or 'unrecorded'})")
 
     if problems:
