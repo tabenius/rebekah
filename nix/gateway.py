@@ -209,10 +209,31 @@ class Config:
         self.dash_push_key = env.get("REBEKAH_DASH_PUSH_KEY", "").strip()
         self.dash_poll = _int_env(env, "REBEKAH_DASH_POLL_INTERVAL", 30)
         self.dash_heartbeat = _int_env(env, "REBEKAH_DASH_PUSH_INTERVAL", 300)
+        # Extra push targets ("mirrors"): a local Dash next to production or,
+        # later, many. Comma-separated url|key pairs; neither the key alphabet
+        # (rbkp_...) nor a plain origin contains "," or "|", so both are safe
+        # separators. Mirrors receive every view and answer refresh polls, but
+        # never take commands: a click on a test Dash must not move the real
+        # instance (see DashPusher commands=False).
+        self.dash_mirrors = []
+        for entry in env.get("REBEKAH_DASH_MIRRORS", "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            url, sep, key = entry.partition("|")
+            self.dash_mirrors.append((url.strip().rstrip("/"), key.strip()) if sep else (entry, ""))
 
     @property
     def dash_enabled(self):
-        return bool(self.dash_url or self.dash_push_key)
+        return bool(self.dash_url or self.dash_push_key or self.dash_mirrors)
+
+    @property
+    def dash_targets(self):
+        """(url, key) pairs, primary first: one pusher thread each."""
+        targets = []
+        if self.dash_url and self.dash_push_key:
+            targets.append((self.dash_url, self.dash_push_key))
+        return targets + self.dash_mirrors
 
     @property
     def tls_enabled(self):
@@ -1764,8 +1785,10 @@ def make_handler(cfg, auth):
 # the same three /api/v1 payloads the gateway serves, whenever they change and
 # at least every REBEKAH_DASH_PUSH_INTERVAL seconds, and polls Dash every
 # REBEKAH_DASH_POLL_INTERVAL seconds for a "refresh requested" flag (someone
-# clicked Refresh in Dash), pushing at once when it is set. Holds have
-# deadlines: with Ephor enabled it looks for new ones every DASH_WATCH seconds
+# clicked Refresh in Dash), pushing at once when it is set. REBEKAH_DASH_MIRRORS
+# adds further url|key targets (a local Dash next to production, or many):
+# one thread each, same views, but mirrors never take commands, so a click on
+# a test Dash cannot move the real instance. Holds have deadlines: with Ephor enabled it looks for new ones every DASH_WATCH seconds
 # and pushes them at once, and it polls as often as Dash's poll_interval asks
 # (down to DASH_MIN_POLL) while a hold waits or a decision is on its way. Nothing listens:
 # no inbound port is opened. The push key is sent only in the Authorization
@@ -1787,21 +1810,43 @@ DASH_WATCH = 5
 DASH_MIN_POLL = 5
 
 
+def _dash_endpoint_problems(url, key):
+    """Per-target URL/key rules, shared by the primary pair and mirrors."""
+    problems = []
+    if not (url and key):
+        problems.append("need both a URL and a push key (url|key)")
+        return problems
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "http" and host in LOOPBACK:
+        pass  # a local Dash (wrangler dev) or a test double
+    elif parts.scheme != "https":
+        problems.append("URL must be https:// (plain http only to loopback)")
+    if not host or parts.username or parts.password or parts.query or parts.fragment:
+        problems.append("URL must be a plain origin, e.g. https://dash.ragbaz.cc")
+    if not DASH_PUSH_KEY_RE.match(key):
+        problems.append("push key is not a Dash push key (rbkp_...)")
+    return problems
+
+
 def dash_problems(cfg):
     problems = []
-    if not (cfg.dash_url and cfg.dash_push_key):
-        problems.append("set both REBEKAH_DASH_URL and REBEKAH_DASH_PUSH_KEY, or neither")
-        return problems
-    url = urllib.parse.urlsplit(cfg.dash_url)
-    host = (url.hostname or "").lower()
-    if url.scheme == "http" and host in LOOPBACK:
-        pass  # a local Dash (wrangler dev) or a test double
-    elif url.scheme != "https":
-        problems.append("REBEKAH_DASH_URL must be https:// (plain http only to loopback)")
-    if not host or url.username or url.password or url.query or url.fragment:
-        problems.append("REBEKAH_DASH_URL must be a plain origin, e.g. https://dash.ragbaz.cc")
-    if not DASH_PUSH_KEY_RE.match(cfg.dash_push_key):
-        problems.append("REBEKAH_DASH_PUSH_KEY is not a Dash push key (rbkp_...)")
+    if cfg.dash_url or cfg.dash_push_key:
+        if not (cfg.dash_url and cfg.dash_push_key):
+            problems.append("set both REBEKAH_DASH_URL and REBEKAH_DASH_PUSH_KEY, or neither")
+            return problems
+        url = urllib.parse.urlsplit(cfg.dash_url)
+        host = (url.hostname or "").lower()
+        if url.scheme == "http" and host in LOOPBACK:
+            pass  # a local Dash (wrangler dev) or a test double
+        elif url.scheme != "https":
+            problems.append("REBEKAH_DASH_URL must be https:// (plain http only to loopback)")
+        if not host or url.username or url.password or url.query or url.fragment:
+            problems.append("REBEKAH_DASH_URL must be a plain origin, e.g. https://dash.ragbaz.cc")
+        if not DASH_PUSH_KEY_RE.match(cfg.dash_push_key):
+            problems.append("REBEKAH_DASH_PUSH_KEY is not a Dash push key (rbkp_...)")
+    for i, (url, key) in enumerate(cfg.dash_mirrors, 1):
+        problems.extend("mirror %d: %s" % (i, p) for p in _dash_endpoint_problems(url, key))
     if cfg.dash_poll < 10:
         problems.append("REBEKAH_DASH_POLL_INTERVAL must be an integer >= 10 (seconds)")
     if cfg.dash_heartbeat < max(cfg.dash_poll, 10):
@@ -1810,14 +1855,23 @@ def dash_problems(cfg):
 
 
 class DashPusher:
-    """Push this instance's /api/v1 views to Dash; see the section comment."""
+    """Push this instance's /api/v1 views to Dash; see the section comment.
 
-    def __init__(self, cfg, auth, clock=time.monotonic, log=None):
+    target overrides the primary (url, key) pair from cfg for a mirror, and
+    commands=False makes it push-and-poll only: mirrors answer refresh polls
+    but never take commands, so a click on a test Dash cannot move the real
+    instance.
+    """
+
+    def __init__(self, cfg, auth, clock=time.monotonic, log=None, target=None, commands=True):
         self.cfg = cfg
         self.auth = auth
         self.clock = clock
         self.log = log or (lambda msg: sys.stderr.write("rebekah-gateway: dash: " + msg + "\n"))
-        url = urllib.parse.urlsplit(cfg.dash_url)
+        url_str, self._dash_key = target if target is not None else (cfg.dash_url, cfg.dash_push_key)
+        self._dash_url = url_str
+        self.commands = commands
+        url = urllib.parse.urlsplit(url_str or "")
         self._https = url.scheme == "https"
         self._host = url.hostname
         self._port = url.port or (443 if self._https else 80)
@@ -1905,7 +1959,7 @@ class DashPusher:
     def _call(self, method, path, body=None):
         """(status, parsed JSON or None, Retry-After seconds or None). Raises OSError."""
         headers = {
-            "Authorization": "Bearer " + self.cfg.dash_push_key,
+            "Authorization": "Bearer " + self._dash_key,
             "Accept": "application/json",
             "User-Agent": "rebekah-gateway/dash-push",
         }
@@ -1980,16 +2034,19 @@ class DashPusher:
         self.failures = 0
         self.poll_every = self._poll_interval(data)
         # A decision changes what the views show: push them again at once.
-        decided = self.take_commands(data)
-        self.report()
+        # Mirrors skip this whole branch: their Dash is a test surface whose
+        # decisions must never execute here (see commands=False).
+        decided = self.take_commands(data) if self.commands else False
+        if self.commands:
+            self.report()
         if due:
             self.last_digest = digest
             self.last_push = now
             self.refresh = bool((data or {}).get("refresh_requested")) or decided
-            self._note("ok", "pushing to %s" % self.cfg.dash_url)
+            self._note("ok", "pushing to %s" % self._dash_url)
             return 0 if decided else self._wait(now)
         self.refresh = bool((data or {}).get("refresh_requested")) or decided
-        self._note("ok", "pushing to %s" % self.cfg.dash_url)
+        self._note("ok", "pushing to %s" % self._dash_url)
         # Someone asked for fresh data: push now, not at the next poll.
         return 0 if self.refresh else self._wait(now)
 
@@ -2016,12 +2073,18 @@ class DashPusher:
                 delay = self._failed(type(exc).__name__)
 
 
-def start_dash_pusher(cfg, auth):
-    stop = threading.Event()
-    pusher = DashPusher(cfg, auth)
-    thread = threading.Thread(target=pusher.run, args=(stop,), name="dash-push", daemon=True)
-    thread.start()
-    return stop
+def start_dash_pushers(cfg, auth):
+    """One background thread per Dash target (primary first, then mirrors);
+    returns their stop events. Mirrors never take commands."""
+    stops = []
+    for i, target in enumerate(cfg.dash_targets):
+        stop = threading.Event()
+        pusher = DashPusher(cfg, auth, target=target, commands=(i == 0))
+        thread = threading.Thread(target=pusher.run, args=(stop,),
+                                  name="dash-push" if i == 0 else "dash-push-%d" % i, daemon=True)
+        thread.start()
+        stops.append(stop)
+    return stops
 
 
 def build_server(cfg, auth):
@@ -2063,10 +2126,10 @@ def main(argv=None):
     )
     httpd = build_server(cfg, auth)
     if cfg.dash_enabled:
-        start_dash_pusher(cfg, auth)
+        start_dash_pushers(cfg, auth)
         sys.stderr.write(
             "rebekah-gateway: pushing to %s every %ds (checks every %ds)\n"
-            % (cfg.dash_url, cfg.dash_heartbeat, cfg.dash_poll)
+            % (", ".join(url for url, _ in cfg.dash_targets), cfg.dash_heartbeat, cfg.dash_poll)
         )
     try:
         httpd.serve_forever()

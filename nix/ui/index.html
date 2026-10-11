@@ -9,6 +9,7 @@
     --bg: #f6f7f9; --panel: #ffffff; --ink: #16181d; --muted: #5b6472;
     --line: #e3e6ea; --accent: #3b5bdb; --accent-ink: #ffffff;
     --ok: #2b8a3e; --warn: #b8860b; --bad: #c92a2a; --chip: #eef1f6;
+    --priority-p0: #3f6b2f; --priority-p1: #8a6412; --priority-p2: #234a63; --priority-p3: #6d6659;
     --lane-backlog: #8792a2; --lane-active: #3b5bdb; --lane-review: #b8860b;
     --lane-ready: #2b8a3e; --lane-done: #5b6472;
     --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -19,6 +20,7 @@
       --bg: #14161a; --panel: #1c1f26; --ink: #e8eaed; --muted: #9aa4b2;
       --line: #2b3038; --accent: #6b8afd; --accent-ink: #10131a; --chip: #262b34;
       --ok: #51cf66; --warn: #ffd43b; --bad: #ff6b6b;
+      --priority-p0: #8fbc6a; --priority-p1: #d9b44a; --priority-p2: #8fb8d4; --priority-p3: #a39a8b;
     }
   }
   * { box-sizing: border-box; }
@@ -81,6 +83,7 @@
   .chip.task { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
   .chip.ok { color: var(--ok); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); }
   .chip.att { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+  .chip.p0 { color: var(--priority-p0); } .chip.p1 { color: var(--priority-p1); } .chip.p2 { color: var(--priority-p2); } .chip.p3 { color: var(--priority-p3); }
   .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
   .tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 14px; }
@@ -701,7 +704,7 @@
     const grid = el("div", "agenda-reading"), tasks = el("div"), margin = el("aside"); margin.setAttribute("aria-label", "Concept reminders");
     if (p.note) tasks.appendChild(el("p", null, p.note));
     (p.tasks || []).forEach((t) => {
-      const task = el("details", "agenda-task"); task.appendChild(el("summary", null, t.title + " · " + t.priority + " · " + t.status));
+      const task = el("details", "agenda-task"); task.appendChild(el("summary", null, t.title + " · <span class='chip p" + t.priority.slice(1) + "'>" + t.priority + "</span> · " + t.status));
       task.appendChild(el("p", "status", t.id + " · " + (t.owner ? "assigned to " + t.owner : "unassigned") + " · record updated " + agendaTime(t.updated_at)));
       task.appendChild(el("p", null, "Why: " + (t.why || "No rationale recorded.")));
       task.appendChild(el("h4", null, "Full recorded scope")); task.appendChild(el("p", "agenda-scope", t.scope || "No scope recorded."));
@@ -787,7 +790,7 @@
     if (c.kind === "task") {
       meta.appendChild(el("span", "chip task", "task"));
       if (c.task_state) meta.appendChild(el("span", "chip", c.task_state));
-      if (c.priority) meta.appendChild(el("span", "chip", "P:" + c.priority));
+      if (c.priority) meta.appendChild(el("span", "chip p" + c.priority.slice(1), "P:" + c.priority));
     } else {
       if (c.readiness) {
         const good = c.readiness === "ready" || c.readiness === "ready_with_follow_up";
