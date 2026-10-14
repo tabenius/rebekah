@@ -658,6 +658,12 @@ def v1_frog_kanban(cfg):
                 if not isinstance(values, list) or len(values) > 100 or any(not isinstance(value, str) or len(value) > 200 for value in values):
                     raise ValueError("invalid links")
                 item[key] = values
+            files = card.get("files", [])
+            if files is None:
+                files = []
+            if not isinstance(files, list) or len(files) > 100 or any(not isinstance(value, str) or len(value) > 500 for value in files):
+                raise ValueError("invalid files")
+            item["files"] = files
             for key in ("updated_at", "created_at", "status_observed_at"):
                 value = card.get(key)
                 if value is not None:
