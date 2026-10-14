@@ -6,6 +6,9 @@
 
 <h1 align="center">Rebekah</h1>
 
+Optional live **Frog tasks** board alongside WeftMark Work:
+[source, authentication and Dash rollout](docs/FROG-KANBAN.md).
+
 <p align="center">
   A reproducible, self-hosted runtime for governed agentic software work.
 </p>

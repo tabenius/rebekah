@@ -321,7 +321,8 @@ class PusherTest(unittest.TestCase):
             "change-sets": "rebekah.change-set-list.v1",
             "change-requests": "rebekah.change-request-list.v1",
             "oversight": "rebekah.oversight.v1",
-            "daily-agenda": "rebekah.daily-agenda.v1",
+        "daily-agenda": "rebekah.daily-agenda.v1",
+        "frog-kanban": "rebekah.frog-kanban.v1",
         })
         self.assertEqual(body["views"]["change-sets"]["items"][0]["id"], "cs-1")
         self.assertEqual(body["views"]["attention"]["items"][0]["reason"], "dirty_worktree")

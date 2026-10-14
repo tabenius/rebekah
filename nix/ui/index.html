@@ -157,6 +157,9 @@
     .openable { min-height: 44px; }
   }
 </style>
+<style>
+#frogNav{position:sticky;top:0;z-index:5;background:var(--bg);padding:.7rem;border-bottom:1px solid var(--line);transition:transform .18s}#frogNav.auto-hidden:not(:focus-within){transform:translateY(-110%)}#frogNav[data-buttons=icons] .nav-label{display:none}#frogNav[data-buttons=labels] .nav-icon{display:none}#frogCrumb{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#frogSettings label{display:block;margin:1rem 0}#frogBoard .card:hover{border-color:var(--accent)}#frogDetails{padding:1rem;max-width:850px;margin:auto}#frogDetails button{margin:.3rem}#frogNav button{white-space:nowrap}@media(prefers-reduced-motion:reduce){#frogNav{transition:none}}
+</style>
 </head>
 <body>
 <a href="#main" class="skip">Skip to main content</a>
@@ -213,6 +216,7 @@
 
   <div class="tabs" role="tablist" aria-label="Rebekah console">
     <div class="tab" id="tab-board" role="tab" aria-controls="panel-board" aria-selected="true" tabindex="0">Work</div>
+    <div class="tab hidden" id="tab-frog" role="tab" aria-controls="panel-frog" aria-selected="false" tabindex="-1">Frog tasks</div>
     <div class="tab hidden" id="tab-agenda" role="tab" aria-controls="panel-agenda" aria-selected="false" tabindex="-1">Daily Agenda</div>
     <div class="tab" id="tab-attention" role="tab" aria-controls="panel-attention" aria-selected="false" tabindex="-1">Review</div>
     <div class="tab hidden" id="tab-opencode" role="tab" aria-controls="panel-opencode" aria-selected="false" tabindex="-1">Runs</div>
@@ -243,6 +247,15 @@
     <div class="board hidden" id="board"></div>
   </section>
 
+  <section id="panel-frog" class="hidden" role="tabpanel" aria-labelledby="tab-frog" tabindex="0">
+    <nav id="frogNav" class="rowbar" aria-label="Frog navigation"><button id="frogBack" type="button" title="Back to Frog board" aria-label="Back to Frog board"><span class="nav-icon" aria-hidden="true">▦</span><span class="nav-label"> Board</span></button><span id="frogCrumb" class="grow" aria-current="page">Frog board</span><button id="frogRefresh" type="button" title="Refresh Frog board" aria-label="Refresh Frog board"><span class="nav-icon" aria-hidden="true">↻</span><span class="nav-label"> Refresh</span></button><button id="frogSettingsButton" type="button" title="Frog board settings" aria-label="Frog board settings" aria-haspopup="dialog"><span class="nav-icon" aria-hidden="true">⚙</span><span class="nav-label"> Settings</span></button></nav>
+    <dialog id="frogSettings" aria-labelledby="frogSettingsTitle"><h2 id="frogSettingsTitle">Frog board settings</h2><p>Saved locally in this browser, not on the gateway.</p><label>Navigation buttons <select id="frogButtonStyle"><option value="icons-labels">Icons + labels</option><option value="icons">Icons only</option><option value="labels">Labels only</option></select></label><label><input id="frogAutoHide" type="checkbox"> Auto-hide on scroll down; scroll up to reveal</label><button id="frogSettingsDone" type="button">Done · return to work</button></dialog>
+    <p>Choose <strong>Open task →</strong> for a separate details view, or follow a blocker link to explore what needs to happen next. Read-only.</p>
+    <label>Find a task <input id="frogSearch" type="search" placeholder="Title, ID, repository or agent"></label>
+    <p class="status" id="frogStatus" role="status" aria-live="polite">Frog is an optional live source, not the WeftMark evidence board.</p>
+    <div class="board" id="frogBoard"></div>
+    <section id="frogDetails" class="hidden" tabindex="-1" aria-label="Frog task details"></section>
+  </section>
   <section id="panel-agenda" class="hidden" role="tabpanel" aria-labelledby="tab-agenda" tabindex="0">
     <div class="rowbar"><h2>Daily Agenda</h2><span class="grow"></span><button id="agendaRefresh" type="button" class="ghost">Reload latest</button></div>
     <p class="status">Reload reads the latest generated edition; it does not regenerate Git/Frog evidence. Activity is not priority. Suggested slices do not assign or complete native tasks.</p>
@@ -427,12 +440,13 @@
     loadSession();
     loadAttention();
     loadBoard();
+    if (exposed("frog")) { $("tab-frog").classList.remove("hidden"); loadFrogBoard(); }
     loadServices();
     setupProductTabs();
     $("tab-agenda").classList.remove("hidden");
     $("agendaEntry").classList.remove("hidden");
     loadAgenda();
-    if (!boardTimer) boardTimer = setInterval(() => { loadAttention(); loadBoard(); }, 8000);
+    if (!boardTimer) boardTimer = setInterval(() => { loadAttention(); loadBoard(); if (exposed("frog")) loadFrogBoard(); }, 8000);
   }
 
   function exposed(name) { return info && info.expose && info.expose.indexOf(name) >= 0; }
@@ -449,6 +463,11 @@
       try { await api("/api/logout", { method: "POST" }); } catch (e) {}
     }
     token = ""; info = null;
+    frogRequest += 1; frogData = null; frogSelected = null;
+    $("frogDetails").textContent = ""; $("frogDetails").classList.add("hidden");
+    $("frogBoard").classList.remove("hidden"); $("frogSearch").parentElement.classList.remove("hidden");
+    $("frogBoard").textContent = ""; $("tab-frog").classList.add("hidden");
+    $("frogStatus").textContent = "Connect to read private Frog tasks.";
     try { sessionStorage.removeItem(TKEY); } catch (e) {}
     if (boardTimer) { clearInterval(boardTimer); boardTimer = null; }
     $("token").value = "";
@@ -727,6 +746,85 @@
   }
 
   // --- Board ---------------------------------------------------------------
+  let frogData = null, frogRequest = 0, frogSelected = null;
+  async function loadFrogBoard() {
+    const generation = ++frogRequest;
+    const response = await api("/api/v1/frog-kanban");
+    if (generation !== frogRequest || !info) return;
+    if (response.status === 401 || response.status === 403) {
+      frogData = null; frogSelected = null; $("frogBoard").textContent = ""; $("frogDetails").textContent = "";
+      closeFrogTask(); $("frogStatus").textContent = "Authorization lost. Sign in again to read private Frog tasks."; return;
+    }
+    if (!response.ok || response.data?.schema !== "rebekah.frog-kanban.v1" || response.data.status !== "ready") {
+      $("frogStatus").textContent = "Frog unavailable / disabled. Last-known tasks, if any, are stale.";
+      return;
+    }
+    frogData = response.data;
+    $("frogStatus").textContent = "Frog source captured " + frogData.source_observed_at + " · revision " + frogData.revision + (frogData.stale ? " · STALE" : " · current capture") + " · no task writes";
+    renderFrogBoard();
+  }
+  function renderFrogBoard() {
+    if (!frogData) return;
+    const board = $("frogBoard"); board.textContent = "";
+    const query = $("frogSearch").value.toLowerCase();
+    frogData.lanes.forEach((lane) => {
+      const section = el("section", "lane"), items = frogData.items.filter((task) => task.lane === lane.id && [task.title, task.id, task.repository, task.assignee].join(" ").toLowerCase().includes(query));
+      section.appendChild(el("h3", null, lane.title + " · " + items.length));
+      const cards = el("div", "cards");
+      if (!items.length) cards.appendChild(el("p", "empty", "No matching tasks"));
+      items.forEach((task) => {
+        const details = el("article", "card"); details.dataset.frogTask = task.id;
+        const summary = el("button", "ghost"), chip = el("span", "chip p" + task.priority.slice(1), task.priority);
+        summary.type = "button";
+        summary.appendChild(chip); summary.appendChild(el("strong", null, " " + task.title));
+        summary.appendChild(el("span", null, " · Open task →"));
+        summary.addEventListener("click", () => openFrogTask(task.id));
+        details.appendChild(summary); details.appendChild(el("p", "status", task.id + " · " + task.status + " · " + (task.assignee || "unassigned") + " · " + (task.repository || "workspace")));
+        details.appendChild(el("p", "status", "Status observed: " + (task.status_observed_at || "unknown")));
+        [["Unmet dependencies", task.unmet_dependencies], ["Blocks", task.blocks]].forEach(([label, ids]) => {
+          details.appendChild(el("p", "status", label + (ids.length ? ":" : ": none recorded")));
+          ids.forEach((id) => {
+            const other = frogData.items.find((item) => item.id === id), button = el("button", "ghost", other ? "Open " + other.title + " →" : id + " (missing)");
+            button.type = "button";
+            button.addEventListener("click", () => openFrogTask(id));
+            details.appendChild(button);
+          });
+        });
+        cards.appendChild(details);
+      });
+      section.appendChild(cards); board.appendChild(section);
+    });
+  }
+  function openFrogTask(id) {
+    frogSelected = id;
+    const task = frogData.items.find(item => item.id === id), panel = $("frogDetails");
+    $("frogCrumb").textContent = "Frog board / " + (task?.title || id);
+    $("frogBoard").classList.add("hidden"); $("frogSearch").parentElement.classList.add("hidden");
+    panel.classList.remove("hidden"); panel.textContent = "";
+    const back = el("button", "ghost", "← Back to Frog board"); back.type = "button";
+    back.addEventListener("click", closeFrogTask); panel.appendChild(back);
+    panel.appendChild(el("h2", null, task ? task.title : "Missing task"));
+    panel.appendChild(el("p", "status", id + " · Read-only task details. Dependency links open another task."));
+    if (task) {
+      panel.appendChild(el("p", null, task.priority + " · " + task.status + " · " + (task.assignee || "unassigned")));
+      panel.appendChild(el("p", "status", "Status observed: " + (task.status_observed_at || "unknown")));
+      [["Dependencies", task.dependencies], ["Blocks these tasks", task.blocks]].forEach(([label, ids]) => {
+        panel.appendChild(el("h3", null, label));
+        if (!ids.length) panel.appendChild(el("p", "status", "None recorded"));
+        ids.forEach(otherId => {
+          const other = frogData.items.find(item => item.id === otherId), button = el("button", "ghost", "Open " + (other?.title || otherId) + " →");
+          button.type = "button"; button.addEventListener("click", () => openFrogTask(otherId)); panel.appendChild(button);
+        });
+      });
+    }
+    panel.focus();
+  }
+  function closeFrogTask() {
+    const previous = frogSelected; frogSelected = null;
+    $("frogCrumb").textContent = "Frog board";
+    $("frogDetails").classList.add("hidden"); $("frogBoard").classList.remove("hidden"); $("frogSearch").parentElement.classList.remove("hidden");
+    [...$("frogBoard").querySelectorAll("article")].find(node => node.dataset.frogTask === previous)?.querySelector("button").focus();
+  }
   async function loadBoard() {
     if (!info || (info.expose && info.expose.indexOf("weftmark") < 0)) {
       $("boardHint").textContent = "WeftMark is not exposed through this gateway.";
@@ -1108,7 +1206,7 @@
   }
 
   // --- Tabs ----------------------------------------------------------------
-  const TABS = ["attention", "board", "agenda", "opencode", "ollama", "services", "console"];
+  const TABS = ["attention", "board", "frog", "agenda", "opencode", "ollama", "services", "console"];
   function visibleTabs() {
     return TABS.filter((t) => !$("tab-" + t).classList.contains("hidden"));
   }
@@ -1121,6 +1219,7 @@
     });
     if (focus) $("tab-" + name).focus();
     if (name === "agenda" && info) loadAgenda();
+    if (name === "frog" && info) loadFrogBoard();
   }
   TABS.forEach((t) => {
     const tab = $("tab-" + t);
@@ -1160,6 +1259,29 @@
   $("attRefresh").addEventListener("click", loadAttention);
   $("agendaOpen").addEventListener("click", () => selectTab("agenda", true));
   $("agendaRefresh").addEventListener("click", loadAgenda);
+  $("frogRefresh").addEventListener("click", loadFrogBoard);
+  $("frogSearch").addEventListener("input", renderFrogBoard);
+  $("frogBack").addEventListener("click", closeFrogTask);
+  $("frogSettingsButton").addEventListener("click", () => $("frogSettings").showModal());
+  $("frogSettingsDone").addEventListener("click", () => $("frogSettings").close());
+  $("frogDetails").addEventListener("keydown", event => { if (event.key === "Escape") closeFrogTask(); });
+  let frogSettings = {};
+  try { frogSettings = JSON.parse(localStorage.getItem("rebekah.frog.settings.v1") || "{}"); } catch {}
+  if (frogSettings && ["icons", "icons-labels", "labels"].includes(frogSettings.buttons)) $("frogButtonStyle").value = frogSettings.buttons;
+  $("frogAutoHide").checked = frogSettings?.autoHide === true;
+  function applyFrogSettings() { $("frogNav").dataset.buttons = $("frogButtonStyle").value; if (!$("frogAutoHide").checked) $("frogNav").classList.remove("auto-hidden"); }
+  applyFrogSettings();
+  [$("frogButtonStyle"), $("frogAutoHide")].forEach(input => input.addEventListener("input", () => {
+    applyFrogSettings();
+    try { localStorage.setItem("rebekah.frog.settings.v1", JSON.stringify({ buttons: $("frogButtonStyle").value, autoHide: $("frogAutoHide").checked })); } catch {}
+  }));
+  let frogScroll = window.scrollY;
+  window.addEventListener("scroll", () => {
+    const current = Math.max(0, window.scrollY); if (Math.abs(current - frogScroll) < 8 && current > 60) return;
+    $("frogNav").classList.toggle("auto-hidden", $("frogAutoHide").checked && current > frogScroll && current > 100 && !$("frogNav").contains(document.activeElement) && !$("frogSettings").open);
+    frogScroll = current;
+  }, { passive: true });
+  $("frogNav").addEventListener("focusin", () => $("frogNav").classList.remove("auto-hidden"));
   $("svcRefresh").addEventListener("click", loadServices);
   $("csClose").addEventListener("click", () => $("csDialog").close());
   $("csDialog").addEventListener("close", () => {

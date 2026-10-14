@@ -149,6 +149,10 @@ class Config:
         sy_port = int(env.get("SYLVAE_PORT", "8971"))
         wm_host = env.get("WEFTMARK_HOST", "127.0.0.1").strip() or "127.0.0.1"
         wm_port = int(env.get("WEFTMARK_PORT", "8765"))
+        frog_host = env.get("FROG_HOST", "127.0.0.1").strip()
+        if frog_host == "localhost":
+            frog_host = "127.0.0.1"
+        frog_port = _int_env(env, "FROG_PORT", 8788)
         ol_host, ol_port = _split_hostport(
             env.get("OLLAMA_HOST", "127.0.0.1:11434").strip(), 11434
         )
@@ -168,6 +172,7 @@ class Config:
                          ("opencode", oc_pw) if oc_pw else None),
             "sylvae": (sy_host, sy_port, None),
             "ollama": (ol_host, ol_port, None),
+            "frog": (frog_host, frog_port, None),
         }
         if self.ephor_state == "enabled":
             catalogue["ephor"] = (ep_host, ep_port, None)
@@ -292,10 +297,14 @@ class Config:
             problems.extend(dash_problems(self))
         if self.daily_agenda_dir and not os.path.isabs(self.daily_agenda_dir):
             problems.append("REBEKAH_DAILY_AGENDA_DIR must be an absolute directory path")
+        if "frog" in self.backends:
+            host, port, _ = self.backends["frog"]
+            if host not in LOOPBACK or not 1 <= port <= 65535:
+                problems.append("Frog must be a loopback source with an explicit valid FROG_PORT")
         if not self.backends:
             problems.append(
                 "no exposed backends: set REBEKAH_GATEWAY_EXPOSE to a subset of "
-                "weftmark opencode sylvae ollama ephor"
+                "weftmark opencode sylvae ollama ephor frog"
             )
         return problems
 
@@ -602,6 +611,70 @@ def fetch_kanban(cfg):
     return backend_get_json(cfg, "weftmark", "/v0/kanban")
 
 
+def v1_frog_kanban(cfg):
+    """Private, bounded Frog tasks; keep source freshness distinct from gateway read."""
+    out = {"schema": "rebekah.frog-kanban.v1", "source": "rebekah-gateway",
+           "observed_at": _iso_now(), "source_observed_at": None,
+           "status": "disabled" if "frog" not in cfg.backends else "unavailable",
+           "stale": True, "read_only": True, "revision": None, "lanes": [], "items": []}
+    if "frog" not in cfg.backends:
+        return out
+    status, data = internal_json(cfg, "frog", "GET", "/api/v1/kanban")
+    if status != 200 or not isinstance(data, dict):
+        return out
+    try:
+        if data.get("schema") != "frog.kanban-projection.v0" or data.get("source") != "frog" or data.get("read_only") is not True:
+            raise ValueError("not a Frog projection")
+        observed = _agenda_time(data.get("observed_at"))
+        age = (datetime.now(timezone.utc) - observed).total_seconds()
+        if age < -300:
+            raise ValueError("future source capture")
+        lanes = data.get("lanes")
+        expected = {"idea", "blocked", "in_progress", "done"}
+        if not isinstance(lanes, list) or len(lanes) != 4 or {lane["id"] for lane in lanes} != expected:
+            raise ValueError("invalid lanes")
+        cards = data.get("cards")
+        if not isinstance(cards, list) or len(cards) > 1000:
+            raise ValueError("invalid card count")
+        items, ids = [], set()
+        for card in cards:
+            if not isinstance(card, dict) or card.get("lane") not in expected or not isinstance(card.get("ready"), bool):
+                raise ValueError("invalid card")
+            item = {}
+            for key in ("id", "title", "priority", "status", "repository", "assignee"):
+                value = card.get(key)
+                if value is None and key in ("repository", "assignee"):
+                    item[key] = None
+                elif not isinstance(value, str) or len(value) > (500 if key == "title" else 200):
+                    raise ValueError("invalid text")
+                else:
+                    item[key] = value
+            if not item["id"] or item["id"] in ids:
+                raise ValueError("duplicate/empty task")
+            ids.add(item["id"])
+            item.update(lane=card["lane"], ready=card["ready"])
+            for key in ("unmet_dependencies", "dependencies", "blocks", "tags"):
+                values = card.get(key, [])
+                if not isinstance(values, list) or len(values) > 100 or any(not isinstance(value, str) or len(value) > 200 for value in values):
+                    raise ValueError("invalid links")
+                item[key] = values
+            for key in ("updated_at", "created_at", "status_observed_at"):
+                value = card.get(key)
+                if value is not None:
+                    _agenda_time(value)
+                item[key] = value
+            items.append(item)
+        revision = data.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            raise ValueError("invalid revision")
+        out.update(status="ready", stale=age > 30 or age < -5,
+                   source_observed_at=data["observed_at"], revision=revision,
+                   lanes=[{"id": lane["id"], "title": _agenda_text(lane["title"], 100)} for lane in lanes], items=items)
+    except (ValueError, TypeError, KeyError):
+        pass
+    return out
+
+
 def auth_schemes(cfg, auth):
     schemes = []
     if cfg.token_enabled:
@@ -876,7 +949,8 @@ def v1_daily_agenda(cfg):
 
 
 def v1_system(cfg, auth):
-    backends = {nm: {"route": "/" + nm + "/"} for nm in sorted(cfg.backends)}
+    routes = {nm: "/frog/api/v1/kanban" if nm == "frog" else "/" + nm + "/" for nm in sorted(cfg.backends)}
+    backends = {nm: {"route": route} for nm, route in routes.items()}
     return {
         "schema": "rebekah.system.v1",
         "observed_at": _iso_now(),
@@ -887,7 +961,7 @@ def v1_system(cfg, auth):
         "backends": backends,
         "runtime": runtime_snapshot(cfg.runtime_snapshot),
         "urls": {"console": "/" if cfg.ui_enabled else None,
-                 "backends": {nm: "/" + nm + "/" for nm in sorted(cfg.backends)}},
+                  "backends": routes},
         "workflows": {
             "native_review": "weftmark" in cfg.backends,
             "hitl": {"surface": "dash", "configured": cfg.dash_enabled,
@@ -1593,6 +1667,14 @@ def make_handler(cfg, auth):
                 return
             self._json(200, v1_daily_agenda(cfg))
 
+        def _serve_v1_frog_kanban(self):
+            if self._authed() is None:
+                return
+            if self.command not in ("GET", "HEAD"):
+                self._fail(405, "read only")
+                return
+            self._json(200, v1_frog_kanban(cfg))
+
         def _serve_v1_attention(self):
             if self._authed() is None:
                 return
@@ -1842,6 +1924,9 @@ def make_handler(cfg, auth):
             if raw_path in ("/api/v1/daily-agenda", "/api/v1/daily-agenda/"):
                 self._serve_v1_daily_agenda()
                 return
+            if raw_path in ("/api/v1/frog-kanban", "/api/v1/frog-kanban/"):
+                self._serve_v1_frog_kanban()
+                return
             if raw_path in ("/api/v1/attention", "/api/v1/attention/"):
                 self._serve_v1_attention()
                 return
@@ -1874,6 +1959,16 @@ def make_handler(cfg, auth):
                     401, "unauthorized",
                     extra_headers=[("WWW-Authenticate", 'Bearer realm="rebekah"')],
                 )
+                return
+
+            if first == "frog":
+                # Only the bounded read API is exposed, never a generic Frog proxy.
+                if self.command not in ("GET", "HEAD"):
+                    self._fail(405, "read only")
+                elif raw_path != "/frog/api/v1/kanban":
+                    self._fail(404, "not found")
+                else:
+                    self._json(200, v1_frog_kanban(cfg))
                 return
 
             length = int(self.headers.get("Content-Length") or 0)
@@ -2055,9 +2150,17 @@ class DashPusher:
             "daily-agenda": v1_daily_agenda(self.cfg),
             "change-requests": v1_change_requests(self.cfg),
         }
+        # Publish disabled/unavailable as well as ready/empty: absence of a view
+        # must not be confused with zero tasks or a disconnected instance.
+        views["frog-kanban"] = v1_frog_kanban(self.cfg)
         # A large optional edition must not prevent the existing work/review
         # views from reaching Dash. Check the aggregate, not just each view.
         body = {"schema": DASH_ENVELOPE, "views": views}
+        if "frog-kanban" in views and len(json.dumps(body, separators=(",", ":")).encode()) > DASH_MAX_PUSH:
+            frog = views["frog-kanban"]
+            views["frog-kanban"] = {"schema": frog["schema"], "source": "rebekah-gateway",
+                "observed_at": frog["observed_at"], "status": "unavailable", "stale": True,
+                "read_only": True, "source_observed_at": None, "revision": None, "lanes": [], "items": []}
         if len(json.dumps(body, separators=(",", ":")).encode()) > DASH_MAX_PUSH:
             agenda = views["daily-agenda"]
             views["daily-agenda"] = {"schema": agenda["schema"], "source": "rebekah-gateway",
