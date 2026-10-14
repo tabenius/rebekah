@@ -105,6 +105,24 @@ class Config:
         # Private, operator-selected read-only artifact directory; never scan the host.
         self.daily_agenda_dir = env.get("REBEKAH_DAILY_AGENDA_DIR", "").strip()
 
+        # Optional forge enumeration: space-separated provider/repo|token entries
+        # (e.g. "github/tabenius/frog|ghp_xxx gitlab/group/project|glpat-yyy").
+        # Token is a literal or file:/path/to/token. Empty = no forge view.
+        self.forge_repos = []
+        for entry in env.get("REBEKAH_FORGE_REPOS", "").split():
+            name, sep, token = entry.partition("|")
+            name = name.strip()
+            token = token.strip()
+            if not sep or not name or not token:
+                continue
+            if token.startswith("file:"):
+                try:
+                    with open(token[5:]) as handle:
+                        token = handle.read().strip()
+                except OSError:
+                    continue
+            self.forge_repos.append((name, token))
+
         # Internal (token) scheme.
         self.token = env.get("REBEKAH_GATEWAY_TOKEN", "")
 
@@ -944,6 +962,95 @@ def v1_changesets(kanban):
     }
 
 
+def v1_change_requests(cfg):
+    """Enumerate open change requests from configured forges.
+
+    Provider-neutral enumeration via WeftMark's ForgePort. Fails soft: an
+    unavailable provider marks the view stale but never blocks the other views.
+    """
+    if not cfg.forge_repos:
+        return {
+            "schema": "rebekah.change-request-list.v1",
+            "observed_at": _iso_now(),
+            "source": "rebekah-gateway",
+            "count": 0,
+            "stale": False,
+            "enabled": False,
+            "items": [],
+        }
+
+    try:
+        from weftmark.adapters.azure_devops import AzureDevopsForgeAdapter
+        from weftmark.adapters.bitbucket import BitbucketForgeAdapter
+        from weftmark.adapters.forgejo import ForgejoForgeAdapter
+        from weftmark.adapters.gitea import GiteaForgeAdapter
+        from weftmark.adapters.github import GithubForgeAdapter
+        from weftmark.adapters.gitlab import GitlabForgeAdapter
+        from weftmark.application.ports.forge import ForgeChangeState
+    except ImportError:
+        stale = True
+        items = []
+        return {
+            "schema": "rebekah.change-request-list.v1",
+            "observed_at": _iso_now(),
+            "source": "rebekah-gateway",
+            "count": 0,
+            "stale": stale,
+            "enabled": True,
+            "items": items,
+        }
+
+    ADAPTERS = {
+        "github": GithubForgeAdapter,
+        "gitlab": GitlabForgeAdapter,
+        "bitbucket": BitbucketForgeAdapter,
+        "gitea": GiteaForgeAdapter,
+        "forgejo": ForgejoForgeAdapter,
+        "azure-devops": AzureDevopsForgeAdapter,
+    }
+
+    items = []
+    stale = False
+    for name, token in cfg.forge_repos:
+        provider, _, repo = name.partition("/")
+        adapter_cls = ADAPTERS.get(provider)
+        if adapter_cls is None or not repo:
+            stale = True
+            continue
+        try:
+            adapter = adapter_cls(repo, token=token)
+            result = adapter.change_requests(ForgeChangeState.OPEN)
+        except Exception:
+            stale = True
+            continue
+        if result.availability.value == "unavailable":
+            stale = True
+            continue
+        for cr in (result.value or ()):
+            items.append({
+                "id": cr.external_id,
+                "title": cr.title,
+                "state": cr.state.value,
+                "source_branch": cr.source_branch,
+                "target_branch": cr.target_branch,
+                "web_url": cr.web_url,
+                "author": cr.author.login,
+                "draft": cr.draft,
+                "updated_at": cr.updated_at.isoformat(),
+                "repository": name,
+                "provider": provider,
+            })
+    return {
+        "schema": "rebekah.change-request-list.v1",
+        "observed_at": _iso_now(),
+        "source": "rebekah-gateway",
+        "count": len(items),
+        "stale": stale,
+        "enabled": True,
+        "items": items,
+    }
+
+
 def _text(value, limit):
     if value is None:
         return None
@@ -1502,6 +1609,11 @@ def make_handler(cfg, auth):
                 return
             self._json(200, v1_changesets(fetch_kanban(cfg)))
 
+        def _serve_v1_change_requests(self):
+            if self._authed() is None:
+                return
+            self._json(200, v1_change_requests(cfg))
+
         def _serve_v1_changeset(self, cs_id):
             if self._authed() is None:
                 return
@@ -1736,6 +1848,9 @@ def make_handler(cfg, auth):
             if raw_path in ("/api/v1/change-sets", "/api/v1/change-sets/"):
                 self._serve_v1_changesets()
                 return
+            if raw_path in ("/api/v1/change-requests", "/api/v1/change-requests/"):
+                self._serve_v1_change_requests()
+                return
             if raw_path.startswith("/api/v1/change-sets/"):
                 cs_id = urllib.parse.unquote(raw_path[len("/api/v1/change-sets/"):]).strip("/")
                 if not cs_id or "/" in cs_id:
@@ -1938,6 +2053,7 @@ class DashPusher:
             "change-sets": v1_changesets(kanban),
             "oversight": v1_oversight(self.cfg),
             "daily-agenda": v1_daily_agenda(self.cfg),
+            "change-requests": v1_change_requests(self.cfg),
         }
         # A large optional edition must not prevent the existing work/review
         # views from reaching Dash. Check the aggregate, not just each view.

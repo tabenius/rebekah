@@ -273,6 +273,30 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config(REBEKAH_DASH_URL="https://dash.ragbaz.cc").validate(), [])
         self.assertEqual(config().validate(), [])
 
+    def test_change_requests_disabled_when_no_forge_configured(self):
+        cfg = config()
+        self.assertEqual(cfg.forge_repos, [])
+        result = gw.v1_change_requests(cfg)
+        self.assertEqual(result["schema"], "rebekah.change-request-list.v1")
+        self.assertEqual(result["enabled"], False)
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["stale"], False)
+
+    def test_change_requests_parses_repo_and_token(self):
+        cfg = config(REBEKAH_FORGE_REPOS="github/tabenius/frog|ghp_xxx gitlab/group/project|glpat-yyy")
+        self.assertEqual(cfg.forge_repos, [
+            ("github/tabenius/frog", "ghp_xxx"),
+            ("gitlab/group/project", "glpat-yyy"),
+        ])
+
+    def test_change_requests_fails_soft_when_forge_unreachable(self):
+        cfg = config(REBEKAH_FORGE_REPOS="github/tabenius/frog|ghp_xxx")
+        result = gw.v1_change_requests(cfg)
+        self.assertEqual(result["schema"], "rebekah.change-request-list.v1")
+        self.assertEqual(result["enabled"], True)
+        self.assertEqual(result["count"], 0)
+        self.assertTrue(result["stale"])
+
 
 class PusherTest(unittest.TestCase):
     def setUp(self):
@@ -295,6 +319,7 @@ class PusherTest(unittest.TestCase):
             "system": "rebekah.system.v1",
             "attention": "rebekah.attention.v1",
             "change-sets": "rebekah.change-set-list.v1",
+            "change-requests": "rebekah.change-request-list.v1",
             "oversight": "rebekah.oversight.v1",
             "daily-agenda": "rebekah.daily-agenda.v1",
         })
