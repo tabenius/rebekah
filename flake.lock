@@ -74,17 +74,17 @@
     "weftmark-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1790984549,
-        "narHash": "sha256-+nT5iCoLJvKD4NkputzIrWnmmao60n+FpXXZ5TQ5EZ4=",
+        "lastModified": 1791962795,
+        "narHash": "sha256-UViYx80PEkz7Bl6Am5HANenT7cGkYRW0BRqy1/FGuFM=",
         "owner": "tabenius",
         "repo": "WeftMark",
-        "rev": "8d4e270f3aa18877ba177a19fa5da0fea8266acf",
+        "rev": "f16ba03f9a79515c2239ea2ec677facaecd5df19",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
+        "ref": "f16ba03",
         "repo": "WeftMark",
-        "rev": "8d4e270f3aa18877ba177a19fa5da0fea8266acf",
         "type": "github"
       }
     }

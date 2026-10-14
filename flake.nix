@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     weftmark-src = {
-      url = "github:tabenius/WeftMark/8d4e270f3aa18877ba177a19fa5da0fea8266acf";
+      url = "github:tabenius/WeftMark/f16ba03";
       flake = false;
     };
     sylvae-src = {
@@ -25,6 +25,7 @@
       url = "path:./nix/ephor-absent";
       flake = false;
     };
+    # Force rebuild: force-rebuild = 1;
   };
 
   outputs = { self, nixpkgs, weftmark-src, sylvae-src, nostoi-src, ephor-src }:
