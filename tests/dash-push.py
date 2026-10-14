@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+from unittest.mock import patch
 import unittest
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -315,6 +316,8 @@ class PusherTest(unittest.TestCase):
         self.assertEqual(req["auth"], "Bearer " + KEY)
         body = req["body"]
         self.assertEqual(body["schema"], "rebekah.dash-push.v1")
+        self.assertGreater(body["schedule"]["next_push_at"], int(time.time()))
+
         self.assertEqual({k: v["schema"] for k, v in body["views"].items()}, {
             "system": "rebekah.system.v1",
             "attention": "rebekah.attention.v1",
@@ -328,6 +331,13 @@ class PusherTest(unittest.TestCase):
         self.assertEqual(body["views"]["attention"]["items"][0]["reason"], "dirty_worktree")
         for view in body["views"].values():
             self.assertRegex(view["observed_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_heartbeat_deadline_is_reported_and_limits_the_next_wait(self):
+        with patch.object(gw.time, 'time', return_value=2000000000):
+            self.pusher.step()
+        self.assertEqual(Dash.requests[-1]['body']['schedule']['next_push_at'], 2000000300)
+        self.pusher.last_call = self.clock.t + 298
+        self.assertEqual(self.pusher._wait(self.clock.t + 298), 2)
 
     def test_unchanged_views_only_poll_until_the_heartbeat(self):
         self.pusher.step()

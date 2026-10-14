@@ -19,6 +19,12 @@ The optional Dash pusher sends the same view through existing TLS connectors;
 it includes explicit disabled/unavailable states even when Frog is not enabled.
 A valid zero-task snapshot is ready and carries both source capture and gateway
 observation timestamps; it is not an absent push or a connection error.
+
+The push envelope also includes `schedule.next_push_at` (UTC unix seconds): the
+producer's next heartbeat deadline. Scheduling is separate from source capture
+and receipt times. Changes and requested refreshes may push earlier; network
+failures can delay delivery. The monotonic scheduler wakes by this deadline even
+when it falls before the next ordinary poll. Metadata never authorizes a write.
 mirrors still cannot apply real-instance commands. Deploy the updated Dash
 consumer before activating Frog pushes. Oversized optional data degrades to
 unavailable instead of blocking existing Work/Review/System views.

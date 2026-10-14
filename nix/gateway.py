@@ -2155,7 +2155,7 @@ class DashPusher:
         views["frog-kanban"] = v1_frog_kanban(self.cfg)
         # A large optional edition must not prevent the existing work/review
         # views from reaching Dash. Check the aggregate, not just each view.
-        body = {"schema": DASH_ENVELOPE, "views": views}
+        body = {"schema": DASH_ENVELOPE, "views": views, "schedule": {"next_push_at": 9999999999}}
         if "frog-kanban" in views and len(json.dumps(body, separators=(",", ":")).encode()) > DASH_MAX_PUSH:
             frog = views["frog-kanban"]
             views["frog-kanban"] = {"schema": frog["schema"], "source": "rebekah-gateway",
@@ -2273,8 +2273,12 @@ class DashPusher:
         self.last_call = now
         try:
             if due:
+                # Report the actual heartbeat deadline, using wall-clock UTC
+                # for delivery while the scheduler itself remains monotonic.
+                next_push_at = int(time.time() + max(1, now + self.cfg.dash_heartbeat - self.clock()))
                 status, data, retry = self._call(
-                    "POST", "/api/connector/push", {"schema": DASH_ENVELOPE, "views": views})
+                    "POST", "/api/connector/push", {"schema": DASH_ENVELOPE, "views": views,
+                    "schedule": {"next_push_at": next_push_at}})
             else:
                 status, data, retry = self._call("GET", "/api/connector/pending")
         except (OSError, http.client.HTTPException) as exc:
@@ -2320,6 +2324,8 @@ class DashPusher:
     def _wait(self, now):
         """Seconds to the next round: the next poll, or sooner to watch for holds."""
         until_poll = max(self.poll_every - (now - (self.last_call or now)), 1)
+        if self.last_push is not None:
+            until_poll = min(until_poll, max(self.cfg.dash_heartbeat - (now - self.last_push), 1))
         if self.cfg.ephor_state == "enabled":
             return min(DASH_WATCH, until_poll)
         return until_poll
