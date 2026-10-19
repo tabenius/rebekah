@@ -12,6 +12,7 @@
 #   REBEKAH_VOLUME     state volume                      (default: rebekah-state)
 #   REBEKAH_PIDS_LIMIT process limit                     (default: 4096)
 #   REBEKAH_MEMORY     memory limit, e.g. 16g            (default: none)
+#   REBEKAH_LOG_DRIVER journald, or none when systemd captures attached output
 #   REBEKAH_ENV_FILE   extra container env (no secrets)  (default: ~/.config/rebekah/container.env)
 #   REBEKAH_RUNTIME_STATUS_DIR host snapshot directory (optional, read-only)
 #   REBEKAH_DAILY_AGENDA_HOST_DIR generated agenda directory (optional, read-only)
@@ -29,6 +30,11 @@ name="${REBEKAH_NAME:-rebekah}"
 workspace="${REBEKAH_WORKSPACE:-$HOME/workspace}"
 volume="${REBEKAH_VOLUME:-rebekah-state}"
 env_file="${REBEKAH_ENV_FILE:-$HOME/.config/rebekah/container.env}"
+log_driver="${REBEKAH_LOG_DRIVER:-journald}"
+case "$log_driver" in
+  journald|none) ;;
+  *) printf 'rebekah-run: log driver must be journald or none\n' >&2; exit 1 ;;
+esac
 
 if ! git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1; then
   printf 'rebekah-run: %s must be a Git repository with a commit\n' "$workspace" >&2
@@ -67,6 +73,7 @@ podman volume exists "$volume" || podman volume create "$volume" >/dev/null
 
 args=(
   --rm --name "$name"
+  --log-driver "$log_driver"
   --read-only
   --cap-drop=ALL
   --cap-add=CHOWN --cap-add=DAC_OVERRIDE
@@ -117,4 +124,11 @@ for pair in \
   fi
 done
 
+# Under systemd, preserve stdout/stderr severity without conmon's duplicate
+# journal delivery. systemd-cat connects the two descriptors directly to the
+# journal and execs the command; no shell forwarding loop or logger child.
+if [[ "$log_driver" == "none" && -n "${INVOCATION_ID:-}" ]]; then
+  exec systemd-cat --identifier="$name" --priority=info --stderr-priority=err \
+    podman run "${args[@]}" "$image" "$@"
+fi
 exec podman run "${args[@]}" "$image" "$@"

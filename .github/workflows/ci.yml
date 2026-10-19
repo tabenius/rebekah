@@ -35,6 +35,8 @@ jobs:
           bash tests/gateway.sh
       - name: Test the Dash push client
         run: python3 tests/dash-push.py
+      - name: Test gateway logging and single-stream launcher
+        run: python3 tests/log-hardening.py
       - name: Test the private agenda view
         run: python3 tests/daily-agenda.py
       - name: Test deployment rollback and promotion

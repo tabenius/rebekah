@@ -1538,16 +1538,28 @@ def apply_command(cfg, command, now_ms=None):
     return result
 
 
+def gateway_log(level, event, **fields):
+    """One structured line; callers supply safe fields, never credentials/bodies."""
+    detail = " ".join(key + "=" + json.dumps(value, ensure_ascii=True)
+                      for key, value in fields.items())
+    sys.stderr.write("service=rebekah-gateway level=%s event=%s %s\n" %
+                     (level, event, detail))
+
+
 def make_handler(cfg, auth):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "rebekah-gateway"
         sys_version = ""
 
-        def log_message(self, fmt, *args):  # to stderr, no credentials
-            sys.stderr.write("gateway: " + (fmt % args) + "\n")
+        def log_message(self, fmt, *args):
+            # BaseHTTPRequestHandler can include raw request targets and bad
+            # headers here. Do not put tokens/query strings into diagnostics.
+            gateway_log("WARN", "http_protocol_diagnostic")
 
         def _write_head(self, status, headers, body_len=None):
+            if status >= 400:
+                gateway_log("ERROR" if status >= 500 else "WARN", "http_response", status=status)
             self.send_response_only(status)
             self.send_header("X-Rebekah-Gateway", "1")
             for key, value in headers:
@@ -2124,7 +2136,9 @@ class DashPusher:
         self.cfg = cfg
         self.auth = auth
         self.clock = clock
-        self.log = log or (lambda msg: sys.stderr.write("rebekah-gateway: dash: " + msg + "\n"))
+        self.log = log or (lambda msg: gateway_log(
+            "WARN" if msg.startswith(("cannot reach Dash", "Dash rejected")) else "INFO",
+            "dash", message=msg))
         url_str, self._dash_key = target if target is not None else (cfg.dash_url, cfg.dash_push_key)
         self._dash_url = url_str
         self.commands = commands
@@ -2140,6 +2154,8 @@ class DashPusher:
         self.refresh = False
         self.failures = 0
         self._state = None  # last logged state, so the log shows transitions only
+        self._kanban = None
+        self._kanban_at = None
         # Decisions from Dash: results not yet acknowledged, and every result
         # of the last MAX_REMEMBERED commands, so a command Dash sends again
         # (its acknowledgement was lost) is reported, never applied twice.
@@ -2147,7 +2163,15 @@ class DashPusher:
         self.applied = {}
 
     def views(self):
-        kanban = fetch_kanban(self.cfg)
+        # Kanban is a dashboard projection, not the authority for oversight.
+        # Bound idle reads to once per 30s while keeping v1_oversight below on
+        # every five-second watch. Explicit refresh/decisions bypass the cache.
+        now = self.clock()
+        if (self._kanban_at is None or self._kanban is None or self.refresh
+                or now - self._kanban_at >= min(self.cfg.dash_poll, 30)):
+            self._kanban = fetch_kanban(self.cfg)
+            self._kanban_at = now
+        kanban = self._kanban
         views = {
             "system": v1_system(self.cfg, self.auth),
             "attention": v1_attention(kanban),

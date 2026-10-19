@@ -33,6 +33,21 @@ REBEKAH_IMAGE=ghcr.io/tabenius/rebekah@sha256:…   # pin a digest; see "Updatin
 Container settings that are not secrets (for example `REBEKAH_CHANGE_SET_ID`,
 `REBEKAH_DASH_URL`) go in `~/.config/rebekah/container.env`.
 
+### One journal delivery path
+
+The default `REBEKAH_LOG_DRIVER=journald` preserves Podman's own container log.
+When running attached under systemd this can duplicate stdout/stderr in the
+journal. To use only systemd's attached stream, set `REBEKAH_LOG_DRIVER=none`
+in the **host** settings and set a stable `SyslogIdentifier` in a service
+drop-in. Adapt edge selection, health observers, and dashboards to that
+identifier before activating it. `podman logs` is then unavailable; use
+`journalctl --user -u <unit>`. A container restart is required to switch drivers.
+When systemd supplies `INVOCATION_ID`, the launcher uses host `systemd-cat` to
+connect stdout at info priority and stderr at error priority, both identified
+by the container name. Application-declared levels and HTTP status can still
+override those transport defaults downstream. Outside systemd, attached output
+stays on the caller's terminal.
+
 **Secrets** are Podman secrets. `rebekah-run` passes each one that exists as an
 environment variable inside the container only, so it does not show in
 `podman inspect` or in any file the unit reads:

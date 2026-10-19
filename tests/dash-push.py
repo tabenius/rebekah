@@ -22,7 +22,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GATEWAY = os.path.join(HERE, "..", "nix", "gateway.py")
+GATEWAY = os.environ.get("REBEKAH_GATEWAY_SOURCE", os.path.join(HERE, "..", "nix", "gateway.py"))
 spec = importlib.util.spec_from_file_location("gateway", GATEWAY)
 gw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gw)
