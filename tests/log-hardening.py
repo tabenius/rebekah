@@ -91,6 +91,7 @@ class LoggingTests(unittest.TestCase):
             podman.write_text('#!/usr/bin/python3\nimport json,os,sys\n'
                               'args=sys.argv[1:]\n'
                               'if args[:2]==["secret","exists"]: sys.exit(1)\n'
+                              'if args[:2]==["container","exists"]: sys.exit(1)\n'
                               'if args[0]=="run": open(os.environ["CAPTURE"],"w").write(json.dumps(args))\n')
             podman.chmod(0o755)
             env = dict(os.environ, PATH=str(root) + ':' + os.environ['PATH'],
@@ -118,7 +119,45 @@ class LoggingTests(unittest.TestCase):
                        REBEKAH_NAME='test-instance', CAT_CAPTURE=str(root / 'cat-args.json'))
             subprocess.run(['bash', str(ROOT / 'deploy/podman/rebekah-run')], env=env, check=True, capture_output=True)
             self.assertEqual(json.loads((root / 'cat-args.json').read_text()),
-                             ['--identifier=test-instance', '--priority=info', '--stderr-priority=err'])
+                              ['--identifier=test-instance', '--priority=info', '--stderr-priority=err'])
+
+    def test_launcher_recovers_only_stopped_named_containers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            podman = root / 'podman'
+            podman.write_text('''#!/usr/bin/python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ['CAPTURE'], 'a') as handle:
+    handle.write(json.dumps(args) + '\\n')
+if args[:2] == ['secret', 'exists']: sys.exit(1)
+if args[:2] == ['container', 'exists']: sys.exit(int(os.environ.get('EXISTS_CODE', '0')))
+if args[:2] == ['container', 'inspect']: print(os.environ['CONTAINER_STATE'])
+''')
+            podman.chmod(0o755)
+            env = dict(os.environ, PATH=str(root) + ':' + os.environ['PATH'],
+                       REBEKAH_IMAGE='sha256:' + 'a'*64, REBEKAH_WORKSPACE=str(ROOT),
+                       REBEKAH_NAME='test-instance', REBEKAH_ENV_FILE=str(root / 'missing'),
+                       REBEKAH_DAILY_AGENDA_HOST_DIR='', REBEKAH_RUNTIME_STATUS_DIR='',
+                       INVOCATION_ID='', REBEKAH_LOG_DRIVER='none', CAPTURE=str(root / 'calls'))
+            for state in ('configured', 'created', 'exited', 'stopped', 'running', 'paused', 'stopping', 'unknown'):
+                with self.subTest(state=state):
+                    (root / 'calls').write_text('')
+                    env['CONTAINER_STATE'] = state
+                    result = subprocess.run(['bash', str(ROOT / 'deploy/podman/rebekah-run')], env=env, capture_output=True)
+                    calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+                    stopped = state in ('configured', 'created', 'exited', 'stopped')
+                    self.assertEqual(result.returncode == 0, stopped)
+                    removed = [args for args in calls if args[:2] == ['container', 'rm']]
+                    self.assertEqual(removed, [['container', 'rm', 'test-instance']] if stopped else [])
+                    self.assertEqual(any(args[0] == 'run' for args in calls), stopped)
+            for code in ('1', '125'):
+                env['EXISTS_CODE'] = code
+                (root / 'calls').write_text('')
+                result = subprocess.run(['bash', str(ROOT / 'deploy/podman/rebekah-run')], env=env, capture_output=True)
+                calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+                self.assertEqual(result.returncode == 0, code == '1')
+                self.assertFalse(any(args[:2] == ['container', 'rm'] for args in calls))
 
 
 if __name__ == '__main__':

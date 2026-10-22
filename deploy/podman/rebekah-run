@@ -69,6 +69,27 @@ if [[ -n "$agenda_dir" && "${REBEKAH_SKIP_CONTRACT_CHECK:-0}" != "1" ]]; then
   fi
 fi
 
+# An unclean shutdown can leave an --rm container registered after reboot.
+# Remove only a stopped container with this exact name, never a running one;
+# rm without --force also closes the inspect/remove race safely. Named state
+# volumes are preserved (no --volumes or --all).
+if podman container exists "$name"; then
+  existing_state="$(podman container inspect --format '{{.State.Status}}' "$name")"
+  case "$existing_state" in
+    configured|created|exited|stopped)
+      podman container rm "$name" >/dev/null ;;
+    *)
+      printf 'rebekah-run: refusing to replace container %s in state %s\n' "$name" "$existing_state" >&2
+      exit 1 ;;
+  esac
+else
+  status=$?
+  if [[ "$status" -ne 1 ]]; then
+    printf 'rebekah-run: container lookup failed for %s (exit %d)\n' "$name" "$status" >&2
+    exit "$status"
+  fi
+fi
+
 podman volume exists "$volume" || podman volume create "$volume" >/dev/null
 
 args=(

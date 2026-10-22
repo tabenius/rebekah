@@ -103,6 +103,10 @@ rebekah-ab activate ghcr.io/tabenius/rebekah@sha256:<digest>
 
 State lives in the `rebekah-state` volume and survives restarts and updates.
 
+After an unclean shutdown, the launcher removes an exact-name container only
+when Podman reports it stopped. It never force-removes a running/paused
+container and never removes state volumes. Other lookup errors fail closed.
+
 ### Verified activation and rollback
 
 `rebekah-ab` runs as the same user that owns the service and Podman store. It
