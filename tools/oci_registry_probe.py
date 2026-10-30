@@ -30,6 +30,8 @@ def probe(registry, repository, digest):
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         raise ValueError("registry must be a bare HTTPS origin")
     host = parsed.hostname
+    if not re.fullmatch(r"[a-z0-9.-]+", host, re.ASCII) or host.startswith("-") or host.endswith("."):
+        raise ValueError("registry host must be a plain ASCII DNS name")
     # Resolve and pin the selected public address to avoid DNS rebinding.
     candidates = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     public = []
