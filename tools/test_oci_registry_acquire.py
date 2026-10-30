@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from oci_registry_acquire import acquire, MAX_BLOB, MAX_TOTAL, MANIFEST_TYPE
+from oci_inspect import inspect
 
 def blob(value):
     data = json.dumps(value, separators=(",", ":")).encode()
@@ -59,6 +60,9 @@ class AcquisitionTests(unittest.TestCase):
             self.assertEqual(result["publication"], "not-authorized")
             self.assertEqual((output / "blobs/sha256" / digest[7:]).read_bytes(), data)
             self.assertEqual(json.loads((output / "index.json").read_text())["manifests"][0]["digest"], digest)
+            report = inspect(output)
+            self.assertEqual(report["schema"], "ragbaz.oci-inspection/v1")
+            self.assertEqual(len(report["artifacts"]), 1)
 
     def test_rejects_tampered_manifest_from_probe(self):
         data, digest, payloads = self.fixture()
