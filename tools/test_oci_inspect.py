@@ -57,6 +57,25 @@ class TestInspector(unittest.TestCase):
         index["manifests"][0]["size"] = len(encoded)
         (root / "index.json").write_text(json.dumps(index))
 
+    def test_local_subject_association(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original_digest = publish(record(), root)
+            index_path = root / "index.json"
+            index = json.loads(index_path.read_text())
+            original = dict(index["manifests"][0])
+            base_path = root / "blobs" / "sha256" / original_digest[7:]
+            manifest = json.loads(base_path.read_text())
+            manifest["subject"] = {key: original[key] for key in ("mediaType", "digest", "size")}
+            self._replace_manifest(root, index, manifest)
+            index["manifests"].append(original)
+            index_path.write_text(json.dumps(index))
+            result = inspect(root)
+            by_digest = {entry["digest"]: entry for entry in result["artifacts"]}
+            updated = index["manifests"][0]["digest"]
+            self.assertEqual(by_digest[updated]["subjectStatus"], "verified-local-association")
+            self.assertEqual(by_digest[updated]["signature"], "not-verified")
+
     def test_symlink_blob_directory_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             publish(record(), tmp)
