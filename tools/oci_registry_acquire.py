@@ -27,7 +27,9 @@ def _descriptor(value):
 
 def acquire(registry, repository, digest, destination):
     destination = Path(destination)
-    if destination.exists():
+    if not destination.parent.is_dir():
+        raise ValueError('destination parent directory must exist')
+    if destination.is_symlink() or destination.exists():
         raise ValueError("destination must not already exist")
     data, media_type = fetch_manifest(registry, repository, digest)
     if media_type != MANIFEST_TYPE:
@@ -73,6 +75,9 @@ def acquire(registry, repository, digest, destination):
         (stage / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}\n')
         (stage / "index.json").write_text(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
             "manifests": [{"digest": digest, "size": len(data), "mediaType": MANIFEST_TYPE}]}) + "\n")
+        # Refuse to overwrite a destination created while blobs were being fetched.
+        if destination.is_symlink() or destination.exists():
+            raise ValueError('destination appeared during acquisition')
         stage.rename(destination)
     except BaseException:
         shutil.rmtree(stage)
