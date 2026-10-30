@@ -34,6 +34,8 @@ def acquire(registry, repository, digest, destination):
     data, media_type = fetch_manifest(registry, repository, digest)
     if media_type != MANIFEST_TYPE:
         raise ValueError("only single OCI image manifests supported; indexes require explicit selection")
+    if not DIGEST.fullmatch(digest) or hashlib.sha256(data).hexdigest() != digest[7:]:
+        raise ValueError("OCI manifest SHA-256 mismatch")
     manifest = json.loads(data)
     if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2:
         raise ValueError("invalid OCI image manifest")
