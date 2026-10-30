@@ -31,6 +31,8 @@ def acquire(registry, repository, digest, destination):
     if media_type != MANIFEST_TYPE:
         raise ValueError("only single OCI image manifests supported; indexes require explicit selection")
     manifest = json.loads(data)
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2:
+        raise ValueError("invalid OCI image manifest")
     if manifest.get("mediaType", MANIFEST_TYPE) != MANIFEST_TYPE or not isinstance(manifest.get("layers"), list) or len(manifest["layers"]) > MAX_LAYERS:
         raise ValueError("invalid OCI image manifest")
     descriptors = [_descriptor(manifest.get("config"))] + [_descriptor(x) for x in manifest["layers"]]
