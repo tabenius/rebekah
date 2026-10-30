@@ -77,6 +77,14 @@ jobs:
           cd consumers/pieces.ragbaz
           npm ci --ignore-scripts
           node tests/oci-import-chromium.mjs
+      - name: Retain remote inspection evidence (manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.registry_origin != '' && inputs.repository != '' && inputs.digest != '' && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-remote-inspection-report
+          path: ${{ runner.temp }}/oci-remote-report.json
+          retention-days: 7
+          if-no-files-found: error
       - name: Validate Python sources
         run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/oci_registry_probe.py tools/oci_registry_acquire.py tools/test_oci_registry_probe.py tools/test_oci_registry_acquire.py tools/test_oci_handoff.py tools/test_oci_inspect.py
       - name: Run OCI interoperability tests
