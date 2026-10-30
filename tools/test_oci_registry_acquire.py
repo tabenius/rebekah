@@ -60,6 +60,15 @@ class AcquisitionTests(unittest.TestCase):
             self.assertEqual((output / "blobs/sha256" / digest[7:]).read_bytes(), data)
             self.assertEqual(json.loads((output / "index.json").read_text())["manifests"][0]["digest"], digest)
 
+    def test_rejects_tampered_manifest_from_probe(self):
+        data, digest, payloads = self.fixture()
+        tampered = data + b" "
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with self.assertRaisesRegex(ValueError, "manifest SHA-256 mismatch"):
+                self.run_acquire(tampered, digest, payloads, output)
+            self.assertFalse(output.exists())
+
     def test_rejects_tampered_blob_without_creating_layout(self):
         data, digest, payloads = self.fixture()
         key = next(k for k, value in payloads.items() if len(value) > 2)
