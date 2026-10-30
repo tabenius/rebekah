@@ -1,0 +1,21 @@
+name: OCI interoperability
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-oci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python sources
+        run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/test_oci_handoff.py tools/test_oci_inspect.py
+      - name: Run OCI interoperability tests
+        run: python3 -m unittest discover -s tools -p 'test_oci*.py' -v
