@@ -5,6 +5,19 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      registry_origin:
+        description: 'Optional public HTTPS OCI registry origin'
+        required: false
+        type: string
+      repository:
+        description: 'OCI repository path'
+        required: false
+        type: string
+      digest:
+        description: 'Immutable sha256 manifest digest'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -36,7 +49,14 @@ jobs:
           persist-credentials: false
       - name: Run cross-repository OCI consumer smoke test
         run: node tools/oci_consumer_e2e.mjs consumers/pieces.ragbaz consumers/Mouseion
+      - name: Probe external OCI manifest (manual, anonymous, read-only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.registry_origin != '' && inputs.repository != '' && inputs.digest != '' }}
+        env:
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          OCI_REPOSITORY: ${{ inputs.repository }}
+          OCI_DIGEST: ${{ inputs.digest }}
+        run: python3 tools/oci_registry_probe.py --registry "$REGISTRY_ORIGIN" --repository "$OCI_REPOSITORY" --digest "$OCI_DIGEST"
       - name: Validate Python sources
-        run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/test_oci_handoff.py tools/test_oci_inspect.py
+        run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/oci_registry_probe.py tools/test_oci_handoff.py tools/test_oci_inspect.py
       - name: Run OCI interoperability tests
         run: python3 -m unittest discover -s tools -p 'test_oci*.py' -v
