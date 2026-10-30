@@ -101,6 +101,25 @@ class TestInspector(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "subject descriptor"):
                 inspect(root)
 
+    def test_missing_descriptor_media_type_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            publish(record(), tmp)
+            index_path = Path(tmp) / "index.json"
+            index = json.loads(index_path.read_text())
+            index["manifests"][0].pop("mediaType")
+            index_path.write_text(json.dumps(index))
+            with self.assertRaisesRegex(ValueError, "media type"):
+                inspect(tmp)
+
+    def test_symlink_layout_root_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            actual = Path(tmp) / "actual"
+            publish(record(), actual)
+            alias = Path(tmp) / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "layout root"):
+                inspect(alias)
+
     def test_symlink_blob_directory_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             publish(record(), tmp)
