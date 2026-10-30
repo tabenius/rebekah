@@ -51,7 +51,7 @@ def inspect(root):
         raise ValueError("unsupported OCI layout")
     index = _object(index_path.read_bytes(), "index")
     manifests = index.get("manifests")
-    if index.get("schemaVersion") != 2 or not isinstance(manifests, list) or len(manifests) > MAX_DESCRIPTORS:
+    if index.get("schemaVersion") != 2 or index.get("mediaType") not in (None, "application/vnd.oci.image.index.v1+json") or not isinstance(manifests, list) or len(manifests) > MAX_DESCRIPTORS:
         raise ValueError("invalid OCI index")
     artifacts = []
     manifest_by_digest = {}
@@ -92,3 +92,15 @@ def inspect(root):
                 raise ValueError("OCI subject descriptor mismatch")
             artifact["subjectStatus"] = "verified-local-association"
     return {"schemaVersion": "ragbaz.oci-inspection/v1", "artifacts": artifacts}
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    parser = argparse.ArgumentParser(description="Inspect an offline OCI image layout without publishing or executing artifacts")
+    parser.add_argument("layout", help="local OCI image-layout directory")
+    args = parser.parse_args()
+    try:
+        print(json.dumps(inspect(args.layout), indent=2, sort_keys=True))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"OCI inspection refused: {exc}", file=sys.stderr)
+        sys.exit(1)
