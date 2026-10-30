@@ -78,6 +78,6 @@ jobs:
           npm ci --ignore-scripts
           node tests/oci-import-chromium.mjs
       - name: Validate Python sources
-        run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/oci_registry_probe.py tools/oci_registry_acquire.py tools/test_oci_registry_probe.py tools/test_oci_handoff.py tools/test_oci_inspect.py
+        run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/oci_registry_probe.py tools/oci_registry_acquire.py tools/test_oci_registry_probe.py tools/test_oci_registry_acquire.py tools/test_oci_handoff.py tools/test_oci_inspect.py
       - name: Run OCI interoperability tests
         run: python3 -m unittest discover -s tools -p 'test_oci*.py' -v
