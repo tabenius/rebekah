@@ -78,6 +78,21 @@ class AcquisitionTests(unittest.TestCase):
                 self.run_acquire(data, digest, payloads, output, status=302)
             self.assertFalse(output.exists())
 
+    def test_write_failure_does_not_publish_partial_layout(self):
+        data, digest, payloads = self.fixture()
+        original_write = Path.write_bytes
+        def fail_blob_write(path, value):
+            if path.parent.name == "sha256":
+                raise OSError("simulated disk failure")
+            return original_write(path, value)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with patch.object(Path, "write_bytes", fail_blob_write):
+                with self.assertRaisesRegex(OSError, "simulated disk failure"):
+                    self.run_acquire(data, digest, payloads, output)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [], "staging directory must be cleaned")
+
     def test_rejects_existing_destination(self):
         data, digest, payloads = self.fixture()
         with tempfile.TemporaryDirectory() as directory:
