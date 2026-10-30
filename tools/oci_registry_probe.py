@@ -22,7 +22,7 @@ MANIFEST_TYPES = (
 MAX_MANIFEST = 4 * 1024 * 1024
 
 def probe(registry, repository, digest):
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._/-]{0,254}", repository) or ".." in repository.split("/"):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._/-]{0,254}", repository) or any(segment in ("", ".", "..") for segment in repository.split("/")):
         raise ValueError("invalid repository")
     if not DIGEST.fullmatch(digest):
         raise ValueError("require immutable sha256 digest")
