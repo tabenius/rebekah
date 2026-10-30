@@ -84,6 +84,16 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must not already exist"):
                 self.run_acquire(data, digest, payloads, Path(directory))
 
+    def test_rejects_non_object_manifest_without_creating_layout(self):
+        _, _, payloads = self.fixture()
+        for malformed in ([], None, "not a manifest", {"schemaVersion": 1, "layers": []}):
+            data, digest = blob(malformed)
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "layout"
+                with self.assertRaisesRegex(ValueError, "invalid OCI image manifest"):
+                    self.run_acquire(data, digest, payloads, output)
+                self.assertFalse(output.exists())
+
     def test_rejects_excessive_descriptor_size_before_network(self):
         data, digest, payloads = self.fixture()
         manifest = json.loads(data)
