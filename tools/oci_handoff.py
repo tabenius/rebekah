@@ -29,10 +29,14 @@ def validate(record):
         if not isinstance(record.get(field), str) or not record[field]:
             raise ValueError("missing " + field)
     repo = record.get("repository", {})
+    if not isinstance(repo, dict) or not isinstance(repo.get("url"), str) or not repo["url"]:
+        raise ValueError("invalid repository")
     commit = repo.get("commit", "")
     if not isinstance(commit, str) or len(commit) not in (40, 64) or any(c not in "0123456789abcdef" for c in commit):
         raise ValueError("invalid repository commit")
     artifact = record.get("artifact", {})
+    if not isinstance(artifact, dict):
+        raise ValueError("invalid artifact")
     digest = artifact.get("ociDigest", "")
     if not valid_digest(digest) or not artifact.get("mediaType"):
         raise ValueError("invalid artifact descriptor")
@@ -40,6 +44,8 @@ def validate(record):
     if not isinstance(evidence, list):
         raise ValueError("evidence must be a list")
     for entry in evidence:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid evidence entry")
         if entry.get("kind") not in ("observation", "assertion", "test", "attestation") or not valid_digest(entry.get("digest", "")) or not entry.get("source"):
             raise ValueError("invalid evidence entry")
 
@@ -59,14 +65,26 @@ def publish(record, root):
     descriptor = blob(root, manifest_bytes)
     descriptor["mediaType"] = OCI_MANIFEST
     descriptor["artifactType"] = HANDOFF
-    (root / "oci-layout").write_bytes(encoded({"imageLayoutVersion": "1.0.0"}))
-    (root / "index.json").write_bytes(encoded({"schemaVersion": 2, "mediaType": OCI_INDEX, "manifests": [descriptor]}))
+    layout_path = root / "oci-layout"
+    index_path = root / "index.json"
+    if layout_path.exists() and json.loads(layout_path.read_bytes()) != {"imageLayoutVersion": "1.0.0"}:
+        raise ValueError("unsupported OCI layout")
+    if index_path.exists():
+        index = json.loads(index_path.read_bytes())
+        if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_INDEX or not isinstance(index.get("manifests"), list):
+            raise ValueError("invalid existing OCI index")
+    else:
+        index = {"schemaVersion": 2, "mediaType": OCI_INDEX, "manifests": []}
+    if not any(item.get("digest") == descriptor["digest"] for item in index["manifests"]):
+        index["manifests"].append(descriptor)
+    layout_path.write_bytes(encoded({"imageLayoutVersion": "1.0.0"}))
+    index_path.write_bytes(encoded(index))
     return descriptor["digest"]
 
 def verify(root):
     root = Path(root)
     index = json.loads((root / "index.json").read_bytes())
-    if index.get("mediaType") != OCI_INDEX or len(index.get("manifests", [])) != 1:
+    if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_INDEX or not isinstance(index.get("manifests"), list) or not index["manifests"]:
         raise ValueError("invalid index")
     def read(desc):
         digest = desc["digest"]
@@ -76,7 +94,10 @@ def verify(root):
         if len(data) != desc["size"] or hashlib.sha256(data).hexdigest() != digest[7:]:
             raise ValueError("digest or size mismatch")
         return data
-    manifest = json.loads(read(index["manifests"][0]))
+    manifests = [item for item in index["manifests"] if item.get("artifactType") == HANDOFF]
+    if len(manifests) != 1:
+        raise ValueError("expected exactly one workspace handoff; select a digest explicitly for multi-handoff layouts")
+    manifest = json.loads(read(manifests[0]))
     if manifest.get("artifactType") != HANDOFF or len(manifest.get("layers", [])) != 1:
         raise ValueError("unexpected artifact")
     read(manifest["config"])

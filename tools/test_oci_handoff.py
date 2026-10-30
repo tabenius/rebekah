@@ -25,6 +25,29 @@ class TestOciHandoff(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify(tmp)
 
+    def test_preserves_other_index_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            publish(record(), tmp)
+            index_path = Path(tmp) / "index.json"
+            index = json.loads(index_path.read_text())
+            other = {"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                     "digest": "sha256:" + "c" * 64, "size": 123}
+            index["manifests"].append(other)
+            index_path.write_text(json.dumps(index))
+            publish(record(), tmp)
+            after = json.loads(index_path.read_text())
+            self.assertEqual(len(after["manifests"]), 2)
+            self.assertIn(other, after["manifests"])
+            self.assertEqual(verify(tmp), record())
+
+    def test_invalid_container_types_rejected(self):
+        for field, value in (("repository", []), ("artifact", []), ("evidence", [None])):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                candidate = record()
+                candidate[field] = value
+                with self.assertRaises(ValueError):
+                    publish(candidate, tmp)
+
     def test_invalid_evidence_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             value = record()

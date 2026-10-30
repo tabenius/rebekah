@@ -25,6 +25,8 @@ jobs:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check flake
         run: nix flake check --print-build-logs
+      - name: Test OCI handoff and offline inspector
+        run: python3 -m unittest discover -s tools -p 'test_oci*.py' -v
       - name: Test Ephor connector
         run: bash tests/ephor-connector.sh
       - name: Test OpenCode evidence bridge

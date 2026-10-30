@@ -1,0 +1,91 @@
+name: OCI interoperability
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      registry_origin:
+        description: 'Optional public HTTPS OCI registry origin'
+        required: false
+        type: string
+      repository:
+        description: 'OCI repository path'
+        required: false
+        type: string
+      digest:
+        description: 'Immutable sha256 manifest digest'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  offline-oci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Checkout Pieces (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: tabenius/pieces.ragbaz
+          ref: feat/oci-inspection-consumer
+          token: ${{ secrets.READ_TOKEN }}
+          path: consumers/pieces.ragbaz
+          persist-credentials: false
+      - name: Checkout Mouseion (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: tabenius/Mouseion
+          ref: feat/oci-artifact-import-contract
+          token: ${{ secrets.READ_TOKEN }}
+          path: consumers/Mouseion
+          persist-credentials: false
+      - name: Run cross-repository OCI consumer smoke test
+        run: node tools/oci_consumer_e2e.mjs consumers/pieces.ragbaz consumers/Mouseion
+      - name: Probe external OCI manifest (manual, anonymous, read-only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.registry_origin != '' && inputs.repository != '' && inputs.digest != '' }}
+        env:
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          OCI_REPOSITORY: ${{ inputs.repository }}
+          OCI_DIGEST: ${{ inputs.digest }}
+        run: python3 tools/oci_registry_probe.py --registry "$REGISTRY_ORIGIN" --repository "$OCI_REPOSITORY" --digest "$OCI_DIGEST"
+      - name: Acquire and inspect external OCI layout (manual, read-only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.registry_origin != '' && inputs.repository != '' && inputs.digest != '' }}
+        env:
+          REGISTRY_ORIGIN: ${{ inputs.registry_origin }}
+          OCI_REPOSITORY: ${{ inputs.repository }}
+          OCI_DIGEST: ${{ inputs.digest }}
+        run: |
+          python3 tools/oci_registry_acquire.py --registry "$REGISTRY_ORIGIN" --repository "$OCI_REPOSITORY" --digest "$OCI_DIGEST" --output "$RUNNER_TEMP/oci-remote-layout"
+          python3 tools/oci_inspect.py "$RUNNER_TEMP/oci-remote-layout" > "$RUNNER_TEMP/oci-remote-report.json"
+          python3 -c "import json,os; r=json.load(open(os.environ['RUNNER_TEMP']+'/oci-remote-report.json')); assert len(r['artifacts']) == 1; print('Remote OCI layout verified and inspected')"
+          node tools/oci_remote_consumers.mjs "$RUNNER_TEMP/oci-remote-report.json" consumers/pieces.ragbaz consumers/Mouseion "$OCI_DIGEST"
+      - name: Render remote OCI report in real Pieces Chromium UI (manual, read-only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.registry_origin != '' && inputs.repository != '' && inputs.digest != '' }}
+        env:
+          PIECES_OCI_REPORT_PATH: ${{ runner.temp }}/oci-remote-report.json
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y chromium
+          cd consumers/pieces.ragbaz
+          npm ci --ignore-scripts
+          node tests/oci-import-chromium.mjs
+      - name: Retain remote inspection evidence (manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.registry_origin != '' && inputs.repository != '' && inputs.digest != '' && success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-remote-inspection-report
+          path: ${{ runner.temp }}/oci-remote-report.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Validate Python sources
+        run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/oci_registry_probe.py tools/oci_registry_acquire.py tools/test_oci_registry_probe.py tools/test_oci_registry_acquire.py tools/test_oci_handoff.py tools/test_oci_inspect.py
+      - name: Run OCI interoperability tests
+        run: python3 -m unittest discover -s tools -p 'test_oci*.py' -v
