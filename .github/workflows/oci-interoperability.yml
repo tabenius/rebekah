@@ -15,6 +15,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Validate Python sources
         run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/test_oci_handoff.py tools/test_oci_inspect.py
       - name: Run OCI interoperability tests
