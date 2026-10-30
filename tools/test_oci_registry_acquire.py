@@ -93,6 +93,31 @@ class AcquisitionTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertEqual(list(Path(directory).iterdir()), [], "staging directory must be cleaned")
 
+    def test_rejects_blob_content_length_mismatch(self):
+        data, digest, payloads = self.fixture()
+        def connection(registry, repository, requested):
+            payload = payloads[requested]
+            return Connection(Response(payload, length=len(payload) + 1))
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with patch("oci_registry_acquire.fetch_manifest", return_value=(data, MANIFEST_TYPE)), \
+                 patch("oci_registry_acquire._connection", side_effect=connection):
+                with self.assertRaisesRegex(ValueError, "Content-Length mismatch"):
+                    acquire("https://example.org", "example", digest, output)
+            self.assertFalse(output.exists())
+
+    def test_rejects_aggregate_size_limit_before_blob_fetch(self):
+        data, digest, payloads = self.fixture()
+        manifest = json.loads(data)
+        manifest["config"]["size"] = MAX_BLOB
+        manifest["layers"][0]["size"] = MAX_BLOB
+        data, digest = blob(manifest)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with self.assertRaisesRegex(ValueError, "aggregate size limit"):
+                self.run_acquire(data, digest, payloads, output)
+            self.assertFalse(output.exists())
+
     def test_rejects_existing_destination(self):
         data, digest, payloads = self.fixture()
         with tempfile.TemporaryDirectory() as directory:
