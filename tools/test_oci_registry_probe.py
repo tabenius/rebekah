@@ -20,7 +20,8 @@ class RegistryProbeTests(unittest.TestCase):
     def test_requires_bare_https_origin(self):
         for origin in ("http://registry.example.org", "https://user:secret@registry.example.org",
                        "https://registry.example.org:8443", "https://registry.example.org/v2",
-                       "https://registry.example.org?x=1", "https://registry.example.org/#fragment"):
+                       "https://registry.example.org?x=1", "https://registry.example.org/#fragment", "https://registry.example.org:abc",
+                       "https://registry.example.org:999999"):
             with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, "HTTPS origin"):
                 probe(origin, "project/artifact", D)
 
