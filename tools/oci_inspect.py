@@ -29,7 +29,7 @@ def _read(root, descriptor, limit):
     if type(size) is not int or not 0 <= size <= limit:
         raise ValueError("invalid OCI blob size")
     path = root / "blobs" / "sha256" / digest[7:]
-    if path.is_symlink() or not path.is_file():
+    if (root / "blobs").is_symlink() or (root / "blobs" / "sha256").is_symlink() or path.is_symlink() or not path.is_file():
         raise ValueError("missing or unsafe OCI blob")
     if path.stat().st_size != size:
         raise ValueError("OCI blob size mismatch")
@@ -54,6 +54,7 @@ def inspect(root):
     if index.get("schemaVersion") != 2 or not isinstance(manifests, list) or len(manifests) > MAX_DESCRIPTORS:
         raise ValueError("invalid OCI index")
     artifacts = []
+    manifest_by_digest = {}
     for descriptor in manifests:
         manifest = _object(_read(root, descriptor, MAX_MANIFEST), "manifest")
         if manifest.get("schemaVersion") != 2 or not isinstance(manifest.get("layers"), list) or len(manifest["layers"]) > MAX_DESCRIPTORS:
@@ -61,6 +62,13 @@ def inspect(root):
         _read(root, manifest.get("config"), MAX_BLOB)
         for layer in manifest["layers"]:
             _read(root, layer, MAX_BLOB)
+        subject = manifest.get("subject")
+        if subject is not None:
+            if not isinstance(subject, dict) or not DIGEST.fullmatch(str(subject.get("digest", ""))) or type(subject.get("size")) is not int:
+                raise ValueError("invalid OCI subject descriptor")
+        if descriptor["digest"] in manifest_by_digest:
+            raise ValueError("duplicate OCI manifest digest")
+        manifest_by_digest[descriptor["digest"]] = descriptor
         artifacts.append({
             "digest": descriptor["digest"],
             "artifactType": manifest.get("artifactType"),
@@ -72,4 +80,15 @@ def inspect(root):
             "trust": "not-assessed",
             "publication": "not-authorized",
         })
+    for artifact in artifacts:
+        subject = artifact["subject"]
+        if subject is None:
+            artifact["subjectStatus"] = "none"
+        elif subject["digest"] not in manifest_by_digest:
+            artifact["subjectStatus"] = "unresolved"
+        else:
+            target = manifest_by_digest[subject["digest"]]
+            if subject["size"] != target["size"] or subject.get("mediaType") != target.get("mediaType"):
+                raise ValueError("OCI subject descriptor mismatch")
+            artifact["subjectStatus"] = "verified-local-association"
     return {"schemaVersion": "ragbaz.oci-inspection/v1", "artifacts": artifacts}
