@@ -61,7 +61,7 @@ class AcquisitionTests(unittest.TestCase):
             self.assertEqual((output / "blobs/sha256" / digest[7:]).read_bytes(), data)
             self.assertEqual(json.loads((output / "index.json").read_text())["manifests"][0]["digest"], digest)
             report = inspect(output)
-            self.assertEqual(report["schema"], "ragbaz.oci-inspection/v1")
+            self.assertEqual(report["schemaVersion"], "ragbaz.oci-inspection/v1")
             self.assertEqual(len(report["artifacts"]), 1)
 
     def test_rejects_tampered_manifest_from_probe(self):
