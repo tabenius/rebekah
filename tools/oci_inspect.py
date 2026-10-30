@@ -91,6 +91,27 @@ def inspect(root):
             if subject["size"] != target["size"] or subject.get("mediaType") != target.get("mediaType"):
                 raise ValueError("OCI subject descriptor mismatch")
             artifact["subjectStatus"] = "verified-local-association"
+    # Referrers are reverse subject links among verified local manifests.
+    # Traversal is bounded by MAX_DESCRIPTORS; cycles are reported, not followed.
+    by_digest = {artifact["digest"]: artifact for artifact in artifacts}
+    for artifact in artifacts:
+        artifact["referrers"] = []
+    for artifact in artifacts:
+        if artifact["subjectStatus"] == "verified-local-association":
+            by_digest[artifact["subject"]["digest"]]["referrers"].append(artifact["digest"])
+    for artifact in artifacts:
+        artifact["referrers"].sort()
+    # Detect cycles in the local subject graph. Cyclic metadata is rejected:
+    # it cannot be treated as a coherent provenance hierarchy.
+    for artifact in artifacts:
+        visited = set()
+        current = artifact
+        while current["subjectStatus"] == "verified-local-association":
+            digest = current["digest"]
+            if digest in visited:
+                raise ValueError("cyclic OCI subject graph")
+            visited.add(digest)
+            current = by_digest[current["subject"]["digest"]]
     return {"schemaVersion": "ragbaz.oci-inspection/v1", "artifacts": artifacts}
 
 if __name__ == "__main__":
