@@ -26,6 +26,8 @@ def _read(root, descriptor, limit):
     digest, size = descriptor.get("digest"), descriptor.get("size")
     if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
         raise ValueError("unsupported OCI digest")
+    if not isinstance(descriptor.get("mediaType"), str) or not descriptor["mediaType"]:
+        raise ValueError("invalid OCI descriptor media type")
     if type(size) is not int or not 0 <= size <= limit:
         raise ValueError("invalid OCI blob size")
     path = root / "blobs" / "sha256" / digest[7:]
@@ -41,6 +43,8 @@ def _read(root, descriptor, limit):
 
 def inspect(root):
     root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("unsafe OCI layout root")
     layout_path = root / "oci-layout"
     index_path = root / "index.json"
     if layout_path.is_symlink() or index_path.is_symlink():
@@ -64,7 +68,7 @@ def inspect(root):
             _read(root, layer, MAX_BLOB)
         subject = manifest.get("subject")
         if subject is not None:
-            if not isinstance(subject, dict) or not DIGEST.fullmatch(str(subject.get("digest", ""))) or type(subject.get("size")) is not int:
+            if not isinstance(subject, dict) or not DIGEST.fullmatch(str(subject.get("digest", ""))) or type(subject.get("size")) is not int or subject["size"] < 0 or not isinstance(subject.get("mediaType"), str) or not subject["mediaType"]:
                 raise ValueError("invalid OCI subject descriptor")
         if descriptor["digest"] in manifest_by_digest:
             raise ValueError("duplicate OCI manifest digest")
