@@ -27,6 +27,22 @@ class TestInspector(unittest.TestCase):
             with self.assertRaises(ValueError):
                 inspect(tmp)
 
+    def test_subject_status_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            publish(record(), tmp)
+            self.assertEqual(inspect(tmp)["artifacts"][0]["subjectStatus"], "none")
+
+    def test_symlink_blob_directory_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            publish(record(), tmp)
+            root = Path(tmp)
+            directory = root / "blobs" / "sha256"
+            backup = root / "original-blobs"
+            directory.rename(backup)
+            directory.symlink_to(backup, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                inspect(tmp)
+
     def test_symlink_blob_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             digest = publish(record(), tmp)
