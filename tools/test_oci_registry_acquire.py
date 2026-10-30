@@ -166,6 +166,21 @@ class AcquisitionTests(unittest.TestCase):
                 self.run_acquire(data, digest, payloads, output)
             self.assertFalse(output.exists())
 
+    def test_rename_failure_cleans_staged_layout(self):
+        data, digest, payloads = self.fixture()
+        original_rename = Path.rename
+        def fail_publish(path, target):
+            if Path(target).name == "layout":
+                raise OSError("simulated publish failure")
+            return original_rename(path, target)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with patch.object(Path, "rename", fail_publish):
+                with self.assertRaisesRegex(OSError, "simulated publish failure"):
+                    self.run_acquire(data, digest, payloads, output)
+            self.assertFalse(output.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [], "staging directory must be cleaned")
+
     def test_rejects_existing_destination(self):
         data, digest, payloads = self.fixture()
         with tempfile.TemporaryDirectory() as directory:
