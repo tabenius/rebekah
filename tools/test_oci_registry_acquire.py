@@ -118,6 +118,31 @@ class AcquisitionTests(unittest.TestCase):
                 self.run_acquire(data, digest, payloads, output)
             self.assertFalse(output.exists())
 
+    def test_rejects_symlink_destination(self):
+        data, digest, payloads = self.fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            target.mkdir()
+            output = Path(directory) / "layout"
+            output.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "must not already exist"):
+                self.run_acquire(data, digest, payloads, output)
+            self.assertEqual(list(target.iterdir()), [])
+
+    def test_rejects_destination_created_during_acquisition(self):
+        data, digest, payloads = self.fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            def connection(registry, repository, requested):
+                output.mkdir(exist_ok=True)
+                return Connection(Response(payloads[requested], length=len(payloads[requested])))
+            with patch("oci_registry_acquire.fetch_manifest", return_value=(data, MANIFEST_TYPE)), \
+                 patch("oci_registry_acquire._connection", side_effect=connection):
+                with self.assertRaisesRegex(ValueError, "destination appeared"):
+                    acquire("https://example.org", "example", digest, output)
+            self.assertTrue(output.is_dir())
+            self.assertEqual(list(Path(directory).iterdir()), [output])
+
     def test_rejects_existing_destination(self):
         data, digest, payloads = self.fixture()
         with tempfile.TemporaryDirectory() as directory:
