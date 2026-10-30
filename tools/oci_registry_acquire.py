@@ -70,9 +70,9 @@ def acquire(registry, repository, digest, destination):
         (stage / "blobs" / "sha256").mkdir(parents=True)
         for key, payload in blobs.items():
             (stage / "blobs" / "sha256" / key[7:]).write_bytes(payload)
-        (stage / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}\\n')
+        (stage / "oci-layout").write_text('{"imageLayoutVersion":"1.0.0"}\n')
         (stage / "index.json").write_text(json.dumps({"schemaVersion": 2, "mediaType": "application/vnd.oci.image.index.v1+json",
-            "manifests": [{"digest": digest, "size": len(data), "mediaType": MANIFEST_TYPE}]}) + "\\n")
+            "manifests": [{"digest": digest, "size": len(data), "mediaType": MANIFEST_TYPE}]}) + "\n")
         stage.rename(destination)
     except BaseException:
         shutil.rmtree(stage)
