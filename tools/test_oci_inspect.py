@@ -75,6 +75,31 @@ class TestInspector(unittest.TestCase):
             updated = index["manifests"][0]["digest"]
             self.assertEqual(by_digest[updated]["subjectStatus"], "verified-local-association")
             self.assertEqual(by_digest[updated]["signature"], "not-verified")
+            self.assertEqual(by_digest[original_digest]["referrers"], [updated])
+            self.assertEqual(by_digest[updated]["referrers"], [])
+
+    def test_duplicate_manifest_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            publish(record(), tmp)
+            index_path = Path(tmp) / "index.json"
+            index = json.loads(index_path.read_text())
+            index["manifests"].append(dict(index["manifests"][0]))
+            index_path.write_text(json.dumps(index))
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                inspect(tmp)
+
+    def test_invalid_subject_descriptor_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            publish(record(), root)
+            index_path = root / "index.json"
+            index = json.loads(index_path.read_text())
+            manifest_path = root / "blobs" / "sha256" / index["manifests"][0]["digest"][7:]
+            manifest = json.loads(manifest_path.read_text())
+            manifest["subject"] = {"digest": "sha256:" + "f" * 64, "size": "invalid"}
+            self._replace_manifest(root, index, manifest)
+            with self.assertRaisesRegex(ValueError, "subject descriptor"):
+                inspect(root)
 
     def test_symlink_blob_directory_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
