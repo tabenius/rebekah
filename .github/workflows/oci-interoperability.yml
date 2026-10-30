@@ -12,12 +12,30 @@ permissions:
 jobs:
   offline-oci:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Checkout Pieces (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: tabenius/pieces.ragbaz
+          ref: feat/oci-inspection-consumer
+          token: ${{ secrets.READ_TOKEN }}
+          path: consumers/pieces.ragbaz
+          persist-credentials: false
+      - name: Checkout Mouseion (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: tabenius/Mouseion
+          ref: feat/oci-artifact-import-contract
+          token: ${{ secrets.READ_TOKEN }}
+          path: consumers/Mouseion
+          persist-credentials: false
+      - name: Run cross-repository OCI consumer smoke test
+        run: node tools/oci_consumer_e2e.mjs consumers/pieces.ragbaz consumers/Mouseion
       - name: Validate Python sources
         run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/test_oci_handoff.py tools/test_oci_inspect.py
       - name: Run OCI interoperability tests
