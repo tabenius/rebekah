@@ -1,4 +1,5 @@
 import tempfile
+import json
 import unittest
 from pathlib import Path
 from oci_handoff import publish
@@ -31,6 +32,30 @@ class TestInspector(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             publish(record(), tmp)
             self.assertEqual(inspect(tmp)["artifacts"][0]["subjectStatus"], "none")
+
+    def test_unresolved_subject_is_not_trusted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            publish(record(), tmp)
+            root = Path(tmp)
+            index_path = root / "index.json"
+            index = json.loads(index_path.read_text())
+            descriptor = index["manifests"][0]
+            manifest_path = root / "blobs" / "sha256" / descriptor["digest"][7:]
+            manifest = json.loads(manifest_path.read_text())
+            manifest["subject"] = {"mediaType": "application/vnd.oci.image.manifest.v1+json",
+                                   "digest": "sha256:" + "f" * 64, "size": 999}
+            self._replace_manifest(root, index, manifest)
+            self.assertEqual(inspect(root)["artifacts"][0]["subjectStatus"], "unresolved")
+
+    @staticmethod
+    def _replace_manifest(root, index, manifest):
+        import hashlib
+        encoded = json.dumps(manifest, separators=(",", ":")).encode()
+        digest = hashlib.sha256(encoded).hexdigest()
+        (root / "blobs" / "sha256" / digest).write_bytes(encoded)
+        index["manifests"][0]["digest"] = "sha256:" + digest
+        index["manifests"][0]["size"] = len(encoded)
+        (root / "index.json").write_text(json.dumps(index))
 
     def test_symlink_blob_directory_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
