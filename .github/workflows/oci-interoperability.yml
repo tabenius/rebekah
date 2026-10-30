@@ -66,6 +66,7 @@ jobs:
           python3 tools/oci_registry_acquire.py --registry "$REGISTRY_ORIGIN" --repository "$OCI_REPOSITORY" --digest "$OCI_DIGEST" --output "$RUNNER_TEMP/oci-remote-layout"
           python3 tools/oci_inspect.py "$RUNNER_TEMP/oci-remote-layout" > "$RUNNER_TEMP/oci-remote-report.json"
           python3 -c "import json,os; r=json.load(open(os.environ['RUNNER_TEMP']+'/oci-remote-report.json')); assert len(r['artifacts']) == 1; print('Remote OCI layout verified and inspected')"
+          node tools/oci_remote_consumers.mjs "$RUNNER_TEMP/oci-remote-report.json" consumers/pieces.ragbaz consumers/Mouseion "$OCI_DIGEST"
       - name: Validate Python sources
         run: python3 -m compileall -q tools/oci_handoff.py tools/oci_inspect.py tools/oci_registry_probe.py tools/oci_registry_acquire.py tools/test_oci_registry_probe.py tools/test_oci_handoff.py tools/test_oci_inspect.py
       - name: Run OCI interoperability tests
