@@ -26,8 +26,12 @@ def _connection(registry, repository, digest):
         raise ValueError("invalid repository")
     if not DIGEST.fullmatch(digest):
         raise ValueError("require immutable sha256 digest")
-    parsed = urlsplit(registry)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None, 443) or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+    try:
+        parsed = urlsplit(registry)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("registry must be a bare HTTPS origin") from error
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or port not in (None, 443) or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         raise ValueError("registry must be a bare HTTPS origin")
     host = parsed.hostname
     if not re.fullmatch(r"[a-z0-9.-]+", host, re.ASCII) or host.startswith("-") or host.endswith("."):
