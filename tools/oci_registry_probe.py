@@ -21,7 +21,7 @@ MANIFEST_TYPES = (
 )
 MAX_MANIFEST = 4 * 1024 * 1024
 
-def probe(registry, repository, digest):
+def _connection(registry, repository, digest):
     if not re.fullmatch(r"[a-z0-9][a-z0-9._/-]{0,254}", repository) or any(segment in ("", ".", "..") for segment in repository.split("/")):
         raise ValueError("invalid repository")
     if not DIGEST.fullmatch(digest):
@@ -48,7 +48,10 @@ def probe(registry, repository, digest):
             self.sock.settimeout(self.timeout)
             self.sock.connect((address, 443))
             self.sock = self._context.wrap_socket(self.sock, server_hostname=host)
-    conn = PinnedConnection(host, timeout=15, context=ssl.create_default_context())
+    return PinnedConnection(host, timeout=15, context=ssl.create_default_context())
+
+def fetch_manifest(registry, repository, digest):
+    conn = _connection(registry, repository, digest)
     try:
         path = f"/v2/{repository}/manifests/{digest}"
         conn.request("GET", path, headers={"Accept": ", ".join(MANIFEST_TYPES), "User-Agent": "ragbaz-oci-readonly-probe/1"})
@@ -67,12 +70,16 @@ def probe(registry, repository, digest):
         manifest = json.loads(data)
         if not isinstance(manifest, dict) or manifest.get("schemaVersion") != 2:
             raise ValueError("invalid OCI manifest JSON")
-        return {"registry": registry, "repository": repository, "digest": digest, "mediaType": media_type,
-                "size": len(data), "integrity": "manifest-sha256-verified",
-                "blobs": "not-fetched", "signature": "not-verified", "identity": "not-verified",
-                "publication": "not-authorized"}
+        return data, media_type
     finally:
         conn.close()
+
+def probe(registry, repository, digest):
+    data, media_type = fetch_manifest(registry, repository, digest)
+    return {"registry": registry, "repository": repository, "digest": digest, "mediaType": media_type,
+            "size": len(data), "integrity": "manifest-sha256-verified",
+            "blobs": "not-fetched", "signature": "not-verified", "identity": "not-verified",
+            "publication": "not-authorized"}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
