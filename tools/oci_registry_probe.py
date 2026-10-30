@@ -41,7 +41,7 @@ def _connection(registry, repository, digest):
     public = []
     for family, _, _, _, address in candidates:
         ip = ipaddress.ip_address(address[0])
-        if ip.is_global:
+        if family in (socket.AF_INET, socket.AF_INET6) and ip.is_global:
             public.append((family, str(ip)))
     if not public or len(public) != len(candidates):
         raise ValueError("registry DNS must resolve exclusively to public IP addresses")
