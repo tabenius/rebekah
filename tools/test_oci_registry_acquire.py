@@ -143,6 +143,29 @@ class AcquisitionTests(unittest.TestCase):
             self.assertTrue(output.is_dir())
             self.assertEqual(list(Path(directory).iterdir()), [output])
 
+    def test_rejects_duplicate_digest_with_conflicting_descriptor(self):
+        data, digest, payloads = self.fixture()
+        manifest = json.loads(data)
+        manifest["layers"][0]["digest"] = manifest["config"]["digest"]
+        manifest["layers"][0]["mediaType"] = "application/vnd.conflicting"
+        data, digest = blob(manifest)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with self.assertRaisesRegex(ValueError, "conflicting descriptors"):
+                self.run_acquire(data, digest, payloads, output)
+            self.assertFalse(output.exists())
+
+    def test_rejects_more_than_256_layers_before_network(self):
+        data, digest, payloads = self.fixture()
+        manifest = json.loads(data)
+        manifest["layers"] = manifest["layers"] * 257
+        data, digest = blob(manifest)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "layout"
+            with self.assertRaisesRegex(ValueError, "invalid OCI image manifest"):
+                self.run_acquire(data, digest, payloads, output)
+            self.assertFalse(output.exists())
+
     def test_rejects_existing_destination(self):
         data, digest, payloads = self.fixture()
         with tempfile.TemporaryDirectory() as directory:
