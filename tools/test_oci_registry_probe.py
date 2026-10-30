@@ -32,5 +32,11 @@ class RegistryProbeTests(unittest.TestCase):
             with self.subTest(addresses=addresses), self.assertRaisesRegex(ValueError, "public IP"):
                 probe("https://registry.example.org", "project/artifact", D)
 
+    @patch("oci_registry_probe.socket.getaddrinfo")
+    def test_rejects_unsupported_address_family(self, dns):
+        dns.return_value = [(socket.AF_UNIX, socket.SOCK_STREAM, 0, "", ("203.0.113.9", 443))]
+        with self.assertRaisesRegex(ValueError, "public IP"):
+            probe("https://registry.example.org", "project/artifact", D)
+
 if __name__ == "__main__":
     unittest.main()
