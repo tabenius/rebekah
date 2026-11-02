@@ -29,6 +29,10 @@ permissions:
 
 jobs:
   publish:
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
     timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
@@ -88,11 +92,23 @@ jobs:
         run: |
           cp -L result rebekah-image.tar.gz
 
+      - name: Generate source-bound R2 release manifest
+        if: github.ref_type == 'tag'
+        run: python3 scripts/registry-release-manifest.py
+      - uses: sigstore/cosign-installer@v3
+        if: github.ref_type == 'tag'
+      - name: Sign public OCI release manifest
+        if: github.ref_type == 'tag'
+        run: cosign sign-blob --yes --bundle release.sigstore.json release.json
+
       - name: Attach tarball to release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: rebekah-image.tar.gz
+          files: |
+            rebekah-image.tar.gz
+            release.json
+            release.sigstore.json
 
   # The opt-in image with the Ephor bridge (off until REBEKAH_EPHOR_ENABLE=1),
   # built like CI's ephor job from nix/ephor.rev. Its source is private, so it
