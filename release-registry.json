@@ -1,0 +1,21 @@
+{
+  "schema": "ragbaz.release-package/1",
+  "product": "rebekah",
+  "repository": "tabenius/rebekah",
+  "channel": "candidate",
+  "distribution": "https://ragbaz.cc/downloads/",
+  "formats": [
+    "oci-archive"
+  ],
+  "description": "Nix-built OCI image and offline Docker archive",
+  "promotion": {
+    "requiresTag": true,
+    "requiresGreenCI": true,
+    "requiresSHA256": true,
+    "requiresAttestation": true,
+    "requiresSigning": true,
+    "requiresInstalledSmoke": false,
+    "automaticStable": false
+  },
+  "releaseEligible": false
+}
