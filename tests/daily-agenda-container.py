@@ -33,6 +33,7 @@ try:
         "--env", "REBEKAH_AUTH_PASSWORD=0", "--env", "REBEKAH_GATEWAY_TOKEN=agenda-container-fixture",
         "--env", "REBEKAH_GATEWAY_HOST=127.0.0.1", "--env", "REBEKAH_DAILY_AGENDA_DIR=/run/daily-agenda",
         "--mount", f"type=bind,src={ROOT / 'nix/gateway.py'},dst=/usr/local/lib/rebekah/gateway.py,ro",
+        "--mount", f"type=bind,src={ROOT / 'nix/gateway_core'},dst=/usr/local/lib/rebekah/gateway_core,ro",
         "--mount", f"type=bind,src={ROOT / 'nix/ui'},dst=/usr/local/share/rebekah/ui,ro",
         "--mount", f"type=bind,src={case.directory},dst=/run/daily-agenda,ro", image,
         "--", "/usr/local/bin/rebekah-gateway"]

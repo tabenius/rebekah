@@ -35,6 +35,7 @@ import base64
 import hashlib
 import hmac
 import http.client
+import importlib.util
 import json
 import mimetypes
 import os
@@ -52,6 +53,20 @@ import time
 from datetime import datetime, timezone
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+# Resolve bundled helpers beside this file, never through the current directory
+# or a caller-controlled PYTHONPATH. This also supports importlib/runpy consumers.
+_core_path = Path(__file__).resolve().with_name("gateway_core")
+_core_spec = importlib.util.spec_from_file_location("_rebekah_gateway_core", _core_path / "__init__.py", submodule_search_locations=[str(_core_path)])
+_core = importlib.util.module_from_spec(_core_spec)
+sys.modules[_core_spec.name] = _core
+_core_spec.loader.exec_module(_core)
+bounded_response_read = _core.bounded_response_read
+_agenda_text = _core.agenda_text
+_agenda_time = _core.agenda_time
+_agenda_count = _core.agenda_count
+_iso_now = _core.iso_now
 
 # --- configuration (runtime env only; no secrets baked into the image) -------
 
@@ -80,11 +95,6 @@ def _int_env(env, name, default):
         return int(env.get(name, str(default)))
     except ValueError:
         return -1  # reported by validate()
-
-
-def _iso_now():
-    # RFC 3339 / ISO 8601 UTC, for the versioned API's observed_at field.
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 class Config:
@@ -493,12 +503,7 @@ class Authenticator:
 
     def principal(self, authorization_header):
         """Return a principal string if the request is authorized, else None."""
-        if not authorization_header:
-            return None
-        scheme, _, credential = authorization_header.partition(" ")
-        if scheme.lower() != "bearer":
-            return None
-        credential = credential.strip()
+        credential = _core.bearer_credential(authorization_header)
         if not credential:
             return None
         if self.cfg.token_enabled and hmac.compare_digest(credential, self.cfg.token):
@@ -530,14 +535,6 @@ class Authenticator:
 
 MAX_BACKEND_JSON = 1024 * 1024
 MAX_PROXY_RESPONSE = 16 * 1024 * 1024
-
-
-def bounded_response_read(response, maximum):
-    """Bound decoded HTTP bodies, including chunked responses without a length."""
-    raw = response.read(maximum + 1)
-    if len(raw) > maximum:
-        raise ValueError("upstream response too large")
-    return raw
 
 
 def backend_get_json(cfg, name, path):
@@ -754,30 +751,6 @@ def _agenda_file(directory, name, maximum=AGENDA_MAX_FILE):
     if len(raw) > maximum:
         raise ValueError("oversized agenda file")
     return raw
-
-
-def _agenda_text(value, maximum=12000):
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        raise ValueError("invalid agenda text")
-    return value[:maximum]
-
-
-def _agenda_time(value):
-    if not isinstance(value, str) or len(value) > 40:
-        raise ValueError("invalid agenda time")
-    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if stamp.tzinfo is None:
-        raise ValueError("agenda time requires zone")
-    return stamp
-
-
-def _agenda_count(value):
-    """A non-negative integer, never a bool masquerading as a count."""
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100000:
-        raise ValueError("invalid agenda count")
-    return value
 
 
 def _agenda_generator(value):

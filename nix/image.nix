@@ -78,6 +78,7 @@ dockerTools.buildLayeredImage {
     # The authenticated API gateway and its launcher (pins the gateway Python
     # that carries PyJWT + cryptography).
     install -m 0555 ${./gateway.py} usr/local/lib/rebekah/gateway.py
+    cp -r ${./gateway_core} usr/local/lib/rebekah/gateway_core
     printf '%s\n' \
       '#!${bash}/bin/bash' \
       'exec ${gatewayPython}/bin/python3 /usr/local/lib/rebekah/gateway.py "$@"' \
