@@ -528,6 +528,18 @@ class Authenticator:
 # Built here, outside the request handler, so the Dash pusher (below) sends
 # exactly what GET /api/v1/{system,attention,change-sets} serves.
 
+MAX_BACKEND_JSON = 1024 * 1024
+MAX_PROXY_RESPONSE = 16 * 1024 * 1024
+
+
+def bounded_response_read(response, maximum):
+    """Bound decoded HTTP bodies, including chunked responses without a length."""
+    raw = response.read(maximum + 1)
+    if len(raw) > maximum:
+        raise ValueError("upstream response too large")
+    return raw
+
+
 def backend_get_json(cfg, name, path):
     """Internal GET to a loopback backend (auth injected as the proxy does).
 
@@ -548,7 +560,7 @@ def backend_get_json(cfg, name, path):
         conn = http.client.HTTPConnection(host, port, timeout=min(cfg.timeout, 5))
         conn.request("GET", path, headers=headers)
         resp = conn.getresponse()
-        raw = resp.read()
+        raw = bounded_response_read(resp, MAX_BACKEND_JSON)
         if resp.status != 200:
             return None
         return json.loads(raw)
@@ -586,7 +598,7 @@ def internal_json(cfg, name, method, path, body=None, bearer=None, headers=None)
         conn = http.client.HTTPConnection(host, port, timeout=min(cfg.timeout, 10))
         conn.request(method, path, body=payload, headers=send)
         resp = conn.getresponse()
-        raw = resp.read(1024 * 1024 + 1)
+        raw = bounded_response_read(resp, MAX_BACKEND_JSON)
         data = None
         if len(raw) <= 1024 * 1024:
             try:
@@ -2010,7 +2022,7 @@ def make_handler(cfg, auth):
                 conn = http.client.HTTPConnection(host, port, timeout=cfg.timeout)
                 conn.request(self.command, upstream_path, body=body, headers=fwd)
                 resp = conn.getresponse()
-                payload = resp.read()
+                payload = bounded_response_read(resp, MAX_PROXY_RESPONSE)
             except Exception:  # noqa: BLE001 -- never leak upstream errors
                 self._fail(502, "bad gateway")
                 return
