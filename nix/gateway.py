@@ -651,6 +651,10 @@ def v1_frog_kanban(cfg):
                     item[key] = value
             if not item["id"] or item["id"] in ids:
                 raise ValueError("duplicate/empty task")
+            if any(not item[key].strip() for key in ("id", "title", "status")):
+                raise ValueError("empty task text")
+            if item["priority"] not in {"p0", "p1", "p2", "p3"}:
+                raise ValueError("invalid task priority")
             ids.add(item["id"])
             item.update(lane=card["lane"], ready=card["ready"])
             for key in ("unmet_dependencies", "dependencies", "blocks", "tags"):

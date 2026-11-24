@@ -5,6 +5,8 @@ import http.client
 import importlib.util
 from pathlib import Path
 import threading
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
@@ -51,6 +53,26 @@ class FrogTests(unittest.TestCase):
             data=copy.deepcopy(self.data); mutate(data)
             self.assertEqual(self.view(data)["status"], "unavailable")
             self.assertEqual(self.view(data)["items"], [])
+
+    def test_source_identity_and_read_only_flag_remain_required(self):
+        for change in ({"schema": "future"}, {"source": "other"}, {"read_only": 1}, {"read_only": False}):
+            data = copy.deepcopy(self.data)
+            data.update(change)
+            self.assertEqual(self.view(data)["status"], "unavailable")
+
+    def test_card_fields_are_not_coerced_or_given_invented_defaults(self):
+        for change in ({"id": " "}, {"title": ""}, {"status": " "}, {"priority": "P1"},
+                       {"priority": 1}, {"ready": "false"}, {"dependencies": None}):
+            data = copy.deepcopy(self.data)
+            data["cards"][0].update(change)
+            self.assertEqual(self.view(data)["status"], "unavailable", change)
+            self.assertEqual(self.view(data)["items"], [])
+
+    def test_gateway_import_needs_only_the_standard_library(self):
+        result = subprocess.run([sys.executable, "-S", "-c",
+                                 f"import runpy; runpy.run_path({str(ROOT / 'nix/gateway.py')!r})"],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_default_disabled_and_loopback_only(self):
         self.assertEqual(gw.v1_frog_kanban(gw.Config({}))["status"], "disabled")
