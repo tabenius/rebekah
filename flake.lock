@@ -48,17 +48,17 @@
     "rbq-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1795636686,
-        "narHash": "sha256-z+Fx+GipmPvIITJ/B/amSDC90+W2k41KzVu8yoJdbxk=",
+        "lastModified": 1795637814,
+        "narHash": "sha256-ZAgs2oqQAe42sXp2cTZLUrZSxB0P0H05PFC7HkVuB80=",
         "owner": "tabenius",
         "repo": "rebsync",
-        "rev": "6457d2dd51deb9ff2ea96fddf0c605659979f42d",
+        "rev": "0ad2d5ab79f24264b7eb805f4c620e89990cfeb3",
         "type": "github"
       },
       "original": {
         "owner": "tabenius",
         "repo": "rebsync",
-        "rev": "6457d2dd51deb9ff2ea96fddf0c605659979f42d",
+        "rev": "0ad2d5ab79f24264b7eb805f4c620e89990cfeb3",
         "type": "github"
       }
     },

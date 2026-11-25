@@ -18,7 +18,7 @@
       flake = false;
     };
     rbq-src = {
-      url = "github:tabenius/rebsync/6457d2dd51deb9ff2ea96fddf0c605659979f42d";
+      url = "github:tabenius/rebsync/0ad2d5ab79f24264b7eb805f4c620e89990cfeb3";
       flake = false;
     };
     # Ephor is opt-in, and its source is private. Nix fetches every locked
