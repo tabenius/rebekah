@@ -64,6 +64,22 @@ for _ in $(seq 1 90); do
     doctor_out="$("$runtime" exec "$name" rebekah-doctor)"
     grep -q 'correlation/change_set_id=smoke-change-set' <<<"$doctor_out"
     grep -q 'ok      binary/nostoi' <<<"$doctor_out"
+    grep -q 'ok      binary/rbq' <<<"$doctor_out"
+    rbq_help="$("$runtime" exec "$name" rbq dash connector --help)"
+    grep -q -- '--instance' <<<"$rbq_help"
+    pair_help="$("$runtime" exec "$name" rebekah-dash-pair --help)"
+    grep -q -- '--seal' <<<"$pair_help"
+    # Opening the explicit headless backend creates no pairing or credential.
+    # Only the gateway UID owns/reads it; agents cannot read pending nonces.
+    "$runtime" exec --user 10005:10005 "$name" rbq dash \
+      --credential-store /var/lib/rebekah/gateway/rbq-credentials --seal none credentials | \
+      jq -e '.credentials == []' >/dev/null
+    store_mode="$("$runtime" exec "$name" stat -c '%a:%u:%g' /var/lib/rebekah/gateway/rbq-credentials)"
+    [[ "$store_mode" == '700:10005:10005' ]]
+    if "$runtime" exec --user 10002:10002 "$name" ls /var/lib/rebekah/gateway/rbq-credentials >/dev/null 2>&1; then
+      printf 'failed: RBQ credential store readable by an agent UID\n' >&2
+      exit 1
+    fi
     # Out-of-box model contract: OpenCode and Sylvae share the same local
     # Ollama model. The smoke image carries no weights, so assert configuration
     # here; v-BAZ separately tests cached/pulled model provisioning.

@@ -230,6 +230,15 @@ class Config:
         # issued there, and Dash never connects in. Both must be set, or neither.
         self.dash_url = env.get("REBEKAH_DASH_URL", "").strip().rstrip("/")
         self.dash_push_key = env.get("REBEKAH_DASH_PUSH_KEY", "").strip()
+        self.dash_transport = env.get("REBEKAH_DASH_TRANSPORT", "push-key").strip()
+        self.dash_credential_store = env.get("REBEKAH_DASH_CREDENTIAL_STORE", "").strip()
+        self.dash_instance_id = env.get("REBEKAH_DASH_INSTANCE_ID", "").strip()
+        self.dash_credential_id = env.get("REBEKAH_DASH_CREDENTIAL_ID", "auto").strip()
+        self.dash_credential_seal = env.get("REBEKAH_DASH_CREDENTIAL_SEAL", "secret-service").strip()
+        self.rbq = env.get("REBEKAH_RBQ", "/usr/local/bin/rbq").strip()
+        if self.dash_transport == "rbq":
+            # Explicit selection only, never an automatic fallback between keys.
+            self.dash_push_key = ""
         self.dash_poll = _int_env(env, "REBEKAH_DASH_POLL_INTERVAL", 30)
         self.dash_heartbeat = _int_env(env, "REBEKAH_DASH_PUSH_INTERVAL", 300)
         # Extra push targets ("mirrors"): a local Dash next to production or,
@@ -248,13 +257,13 @@ class Config:
 
     @property
     def dash_enabled(self):
-        return bool(self.dash_url or self.dash_push_key or self.dash_mirrors)
+        return bool(self.dash_url or self.dash_push_key or self.dash_mirrors or self.dash_credential_store or self.dash_transport != "push-key")
 
     @property
     def dash_targets(self):
         """(url, key) pairs, primary first: one pusher thread each."""
         targets = []
-        if self.dash_url and self.dash_push_key:
+        if self.dash_url and (self.dash_push_key or self.dash_transport == "rbq"):
             targets.append((self.dash_url, self.dash_push_key))
         return targets + self.dash_mirrors
 
@@ -2088,7 +2097,25 @@ def _dash_endpoint_problems(url, key):
 
 def dash_problems(cfg):
     problems = []
-    if cfg.dash_url or cfg.dash_push_key:
+    if cfg.dash_transport not in ("push-key", "rbq"):
+        problems.append("REBEKAH_DASH_TRANSPORT must be push-key or rbq")
+    if cfg.dash_transport == "rbq":
+        parts = urllib.parse.urlsplit(cfg.dash_url)
+        if (parts.scheme != "https" and not (parts.scheme == "http" and parts.hostname in LOOPBACK)) or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment or parts.path not in ("", "/"):
+            problems.append("RBQ Dash URL must be a plain HTTPS origin (HTTP only on loopback)")
+        if not os.path.isabs(cfg.dash_credential_store):
+            problems.append("RBQ connector needs an explicit absolute credential-store directory")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", cfg.dash_instance_id):
+            problems.append("RBQ connector needs the exact existing REBEKAH_DASH_INSTANCE_ID")
+        if cfg.dash_credential_seal not in ("secret-service", "none"):
+            problems.append("RBQ credential sealing must be secret-service or explicitly none")
+        if cfg.dash_credential_id != "auto" and not re.fullmatch(r"[0-9a-f-]{36}", cfg.dash_credential_id):
+            problems.append("RBQ connector credential id must be auto or a key UUID")
+        if not os.path.isabs(cfg.rbq):
+            problems.append("REBEKAH_RBQ must be an absolute executable path")
+    elif cfg.dash_credential_store:
+        problems.append("select REBEKAH_DASH_TRANSPORT=rbq to use a credential store")
+    if cfg.dash_transport == "push-key" and (cfg.dash_url or cfg.dash_push_key):
         if not (cfg.dash_url and cfg.dash_push_key):
             problems.append("set both REBEKAH_DASH_URL and REBEKAH_DASH_PUSH_KEY, or neither")
             return problems
@@ -2127,6 +2154,7 @@ class DashPusher:
         self.log = log or (lambda msg: sys.stderr.write("rebekah-gateway: dash: " + msg + "\n"))
         url_str, self._dash_key = target if target is not None else (cfg.dash_url, cfg.dash_push_key)
         self._dash_url = url_str
+        self._rbq = cfg.dash_transport == "rbq" and (target is None or target == (cfg.dash_url, ""))
         self.commands = commands
         url = urllib.parse.urlsplit(url_str or "")
         self._https = url.scheme == "https"
@@ -2224,6 +2252,8 @@ class DashPusher:
 
     def _call(self, method, path, body=None):
         """(status, parsed JSON or None, Retry-After seconds or None). Raises OSError."""
+        if self._rbq:
+            return self._call_rbq(method, path, body)
         headers = {
             "Authorization": "Bearer " + self._dash_key,
             "Accept": "application/json",
@@ -2258,6 +2288,40 @@ class DashPusher:
         except ValueError:
             retry = None
         return resp.status, data if isinstance(data, dict) else None, retry
+
+    def _call_rbq(self, method, path, body):
+        import subprocess
+        actions = {("GET", "/api/connector/pending"): "pending",
+                   ("POST", "/api/connector/push"): "push",
+                   ("POST", "/api/connector/results"): "results"}
+        action = actions.get((method, path))
+        if action is None:
+            raise OSError("unsupported RBQ connector operation")
+        payload = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
+        if payload is not None and len(payload) > DASH_MAX_PUSH:
+            raise OSError("RBQ connector envelope exceeds limit")
+        # No gateway/admin/governance credentials reach the child process.
+        child_env = {key: os.environ[key] for key in (
+            "PATH", "HOME", "TMPDIR", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+            "SSL_CERT_FILE", "NIX_SSL_CERT_FILE") if key in os.environ}
+        try:
+            result = subprocess.run([self.cfg.rbq, "dash", "--credential-store", self.cfg.dash_credential_store,
+                "--seal", self.cfg.dash_credential_seal, "connector", "--credential", self.cfg.dash_credential_id,
+                "--dash", self._dash_url, "--instance", self.cfg.dash_instance_id, action], input=payload, capture_output=True,
+                timeout=DASH_TIMEOUT + 30, env=child_env, check=False)
+            if result.returncode or len(result.stdout) > DASH_MAX_RESPONSE * 2:
+                raise OSError("RBQ connector credential is unavailable or response exceeds limit")
+            response = json.loads(result.stdout)
+            status = response.get("status")
+            data = response.get("body")
+            retry = response.get("retry_after")
+            if not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599:
+                raise ValueError("invalid status")
+            if retry is not None and (not isinstance(retry, int) or isinstance(retry, bool) or retry < 0):
+                raise ValueError("invalid retry")
+            return status, data if isinstance(data, dict) else None, retry
+        except (ValueError, AttributeError, subprocess.SubprocessError) as exc:
+            raise OSError("invalid or unavailable RBQ connector response") from exc
 
     def _failed(self, why):
         self.failures += 1

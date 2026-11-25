@@ -200,6 +200,46 @@ only).
 
 ### Reporting to RAGBAZ Dash
 
+**Pair an existing instance through RBQ (opt-in).** The image includes a pinned
+`rbq` and `rebekah-dash-pair`. This requests a connector-only pairing, never an
+object-storage/admin grant or a new Dash instance:
+
+```bash
+# In the container; root invocation drops to the gateway UID before storing data.
+# Explicit headless choice: owner-only files, NOT encryption at rest.
+rebekah-dash-pair --seal none --label Rebekah --timeout 0
+```
+
+Open the printed Dash approval URL, compare the matching code, select an existing
+Rebekah instance you administer, then approve with your passkey. Rerun the same
+command to finish the pending claim. No bearer token is printed. For a configured
+desktop Secret Service, explicitly choose `--seal secret-service` instead; a
+locked/unavailable keyring never falls back to plaintext.
+
+After approval, select the RBQ transport in the container's non-secret settings:
+
+```bash
+REBEKAH_DASH_TRANSPORT=rbq
+REBEKAH_DASH_URL=https://dash.ragbaz.cc
+REBEKAH_DASH_INSTANCE_ID=EXISTING_DASH_INSTANCE_ID
+REBEKAH_DASH_CREDENTIAL_STORE=/var/lib/rebekah/gateway/rbq-credentials
+REBEKAH_DASH_CREDENTIAL_ID=auto
+REBEKAH_DASH_CREDENTIAL_SEAL=none
+```
+
+The expected instance ID and origin are checked before data/commands are
+exchanged. The gateway delegates only pending/push/results to RBQ; it does not
+read or export stored credentials or pass its governance/admin secrets to RBQ.
+The gateway-owned `0700` directory and `0600` entries must remain inaccessible to
+other service UIDs. Keep the old Podman push secret for rollback: selecting
+`rbq` explicitly ignores it, never silently falls back to it. Restore
+`REBEKAH_DASH_TRANSPORT=push-key` to use the existing manual path below.
+
+Membership loss, instance archiving, revocation and expiry fail closed. Pairing
+does not approve a held governance action; such decisions still come through
+the existing authenticated human-in-the-loop channel. Neither requesting a
+pairing nor building an image establishes a completed enrollment.
+
 [RAGBAZ Dash](https://dash.ragbaz.cc/) shows an instance's Work, Review and
 System views. It gets them in either or both of two ways:
 

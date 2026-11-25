@@ -1,5 +1,5 @@
 { dockerTools, bash, coreutils, curl, findutils, git, gnugrep, jq, ollama
-, nostoi, opencode, procps, python3, tini, util-linux, weftmark, sylvae
+, nostoi, opencode, procps, python3, tini, util-linux, weftmark, sylvae, rbq
   # Ephor is opt-in (docs/HUMAN-INTERFACE-PLAN.md §1, §6.8): the baseline image
   # is built without it, from public sources only. `.#image-ephor` passes the
   # governance-http bridge in; it still starts only with REBEKAH_EPHOR_ENABLE=1.
@@ -17,7 +17,7 @@ dockerTools.buildLayeredImage {
 
   contents = [
     bash coreutils curl findutils git gnugrep jq nostoi ollama opencode procps sylvae
-    tini util-linux weftmark dockerTools.caCertificates
+    tini util-linux weftmark rbq dockerTools.caCertificates
   ] ++ lib.optional (ephor != null) ephor
     # Streams Ephor's SQLite audit chain off the host (opt-in, with Ephor).
     ++ lib.optional (ephor != null && litestream != null) litestream;
@@ -83,6 +83,13 @@ dockerTools.buildLayeredImage {
       'exec ${gatewayPython}/bin/python3 /usr/local/lib/rebekah/gateway.py "$@"' \
       > usr/local/bin/rebekah-gateway
     chmod 0555 usr/local/bin/rebekah-gateway
+    ln -s ${rbq}/bin/rbq usr/local/bin/rbq
+    install -m 0555 ${./dash-pair.py} usr/local/lib/rebekah/dash-pair.py
+    printf '%s\n' \
+      '#!${bash}/bin/bash' \
+      'exec ${gatewayPython}/bin/python3 /usr/local/lib/rebekah/dash-pair.py "$@"' \
+      > usr/local/bin/rebekah-dash-pair
+    chmod 0555 usr/local/bin/rebekah-dash-pair
 
     # Ephor's MCP gate (opt-in): the bridge that lets agent-proxy (UID 10007)
     # reach WeftMark's and Sylvae's stdio MCP servers, which run as their own

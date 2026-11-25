@@ -89,6 +89,11 @@ its bridge, which runs only with `REBEKAH_EPHOR_ENABLE=1`.
   (token + fail-closed guards on stdlib; OIDC when PyJWT is present).
 - `tests/dash-push.py` — the Dash push client against mock WeftMark and Dash
   (stdlib `unittest`, fake clock, one real gateway process).
+- `nix/dash-pair.py` / `tests/dash-rbq.py` — explicit existing-instance connector
+  pairing through the pinned RBQ credential boundary. Never export a bearer to
+  the gateway; its child gets neither gateway nor governance credentials. Keep
+  manual push-key support, require exact origin/instance and explicit sealing,
+  and never auto-approve the operator's passkey ceremony.
 
 ## Build & validate
 

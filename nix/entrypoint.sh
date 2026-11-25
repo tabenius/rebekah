@@ -77,6 +77,12 @@ doctor() {
     printf 'failed  binary/nostoi missing\n' >&2
     failed=1
   fi
+  if command -v rbq >/dev/null 2>&1; then
+    printf 'ok      binary/rbq\n'
+  else
+    printf 'failed  binary/rbq missing\n' >&2
+    failed=1
+  fi
   for service in "${service_names[@]}"; do
     if [[ -d "$state_dir/$service" ]]; then
       printf 'ok      state/%s\n' "$service"
