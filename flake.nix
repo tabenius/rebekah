@@ -17,6 +17,10 @@
       url = "github:tabenius/nostoi/4e3827a1434cc2bb91f8ef512507f7bc8dfcdbbf";
       flake = false;
     };
+    rbq-src = {
+      url = "github:tabenius/rebsync/6457d2dd51deb9ff2ea96fddf0c605659979f42d";
+      flake = false;
+    };
     # Ephor is opt-in, and its source is private. Nix fetches every locked
     # input, so the default is an in-repo placeholder and the baseline builds
     # from public sources. The opt-in image overrides it with the pinned rev:
@@ -27,7 +31,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, weftmark-src, sylvae-src, nostoi-src, ephor-src }:
+  outputs = { self, nixpkgs, weftmark-src, sylvae-src, nostoi-src, rbq-src, ephor-src }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
@@ -45,6 +49,7 @@
           nostoi = pkgs.callPackage ./nix/packages/nostoi.nix {
             src = nostoi-src;
           };
+          rbq = pkgs.callPackage ./nix/packages/rbq.nix { src = rbq-src; };
           ephor =
             if builtins.pathExists "${ephor-src}/Cargo.lock" then
               pkgs.callPackage ./nix/packages/ephor.nix { src = ephor-src; }
@@ -57,16 +62,16 @@
                 exit 1
               '';
         in {
-          inherit weftmark sylvae nostoi ephor;
+          inherit weftmark sylvae nostoi ephor rbq;
           default = self.packages.${system}.image;
           # The baseline image: no Ephor, public sources only.
           image = pkgs.callPackage ./nix/image.nix {
-            inherit weftmark sylvae nostoi;
+            inherit weftmark sylvae nostoi rbq;
           };
           # Opt-in: the same image with the Ephor bridge bundled (still off
           # until REBEKAH_EPHOR_ENABLE=1). Needs ephor-src overridden (above).
           image-ephor = pkgs.callPackage ./nix/image.nix {
-            inherit weftmark sylvae nostoi ephor;
+            inherit weftmark sylvae nostoi ephor rbq;
             inherit (pkgs) litestream;
           };
         });
@@ -83,12 +88,12 @@
           gateway = pkgs.runCommand "rebekah-gateway-check" {
             nativeBuildInputs = [ (pkgs.python3.withPackages (ps: [ ps.pyjwt ps.cryptography ])) ];
           } ''
-            python3 -m py_compile ${./nix/gateway.py} ${./nix/mcp-bridge.py} ${./tests/gateway-oidc.py} ${./tests/dash-push.py}
+            python3 -m py_compile ${./nix/gateway.py} ${./nix/dash-pair.py} ${./nix/mcp-bridge.py} ${./tests/gateway-oidc.py} ${./tests/dash-push.py} ${./tests/dash-rbq.py}
             touch $out
           '';
           # No ephor here: `nix flake check` must pass from public sources.
           # CI builds .#ephor and .#image-ephor in a separate, token-gated job.
-          inherit (self.packages.${system}) weftmark sylvae nostoi;
+          inherit (self.packages.${system}) weftmark sylvae nostoi rbq;
         });
 
       formatter = forAllSystems (system:
